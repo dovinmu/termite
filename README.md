@@ -1,5 +1,7 @@
 # Termite
 
+[![Build status](https://github.com/antflydb/termite/actions/workflows/termite-go.yml/badge.svg)](https://github.com/antflydb/termite/actions)
+
 ML inference service for embeddings, chunking, and reranking with two-tier caching (memory + singleflight).
 
 ## Running
