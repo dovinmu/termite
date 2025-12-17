@@ -25,7 +25,8 @@ env:
 jobs:
   test:
     name: Test (${{ matrix.backend }})
-    runs-on: codebuild-GitHubActionsRunnerAntflyAntflyDB-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on:
+      - codebuild-GitHubActionsRunnerTermite-${{ github.run_id }}-${{ github.run_attempt }}
     strategy:
       fail-fast: false
       matrix:

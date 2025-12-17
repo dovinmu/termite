@@ -12,7 +12,8 @@ permissions:
 
 jobs:
   goreleaser:
-    runs-on: codebuild-GitHubActionsRunnerAntflyAntflyDB-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on:
+      - codebuild-GitHubActionsRunnerTermite-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6

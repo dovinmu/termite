@@ -22,7 +22,8 @@ env:
 jobs:
   # Build and publish Termite Operator and Proxy images
   publish-termite-operator-images:
-    runs-on: codebuild-GitHubActionsRunnerAntflyAntflyDB-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on:
+      - codebuild-GitHubActionsRunnerTermite-${{ github.run_id }}-${{ github.run_attempt }}
     permissions:
       contents: read
       packages: write
