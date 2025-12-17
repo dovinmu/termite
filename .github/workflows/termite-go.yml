@@ -10,8 +10,20 @@ name: Termite Go
 on:
   push:
     branches: ["main"]
+    paths:
+      - "pkg/**"
+      - "go.work"
+      - "go.work.sum"
+      - "Makefile"
+      - ".github/workflows/termite-go.yml"
   pull_request:
     branches: ["main"]
+    paths:
+      - "pkg/**"
+      - "go.work"
+      - "go.work.sum"
+      - "Makefile"
+      - ".github/workflows/termite-go.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
