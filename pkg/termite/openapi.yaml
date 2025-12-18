@@ -59,6 +59,8 @@ servers:
   - url: /api
     description: Termite API server
 
+security: []  # No authentication required - Termite runs locally
+
 components:
   schemas:
     GPUMode:
@@ -250,16 +252,16 @@ components:
           "chunks":
             [
               {
+                "id": 0,
                 "text": "This is the first chunk...",
-                "start_offset": 0,
-                "end_offset": 100,
-                "metadata": {},
+                "start_char": 0,
+                "end_char": 100,
               },
               {
+                "id": 1,
                 "text": "This is the second chunk...",
-                "start_offset": 90,
-                "end_offset": 190,
-                "metadata": {},
+                "start_char": 90,
+                "end_char": 190,
               },
             ],
           "model": "fixed",
@@ -749,6 +751,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ModelsResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "500":
           description: Internal server error
           content:
@@ -768,3 +776,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VersionResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"

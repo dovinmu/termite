@@ -40,8 +40,13 @@ help: ## Display this help.
 
 ##@ Development
 
+.PHONY: build-docs
+build-docs: ## Bundle and lint OpenAPI specification.
+	npx @redocly/cli@latest bundle pkg/termite/openapi.yaml -o openapi.yaml
+	npx @redocly/cli@latest lint openapi.yaml
+
 .PHONY: generate
-generate: ## Generate CRDs, DeepCopy methods, and RBAC.
+generate: build-docs ## Generate CRDs, DeepCopy methods, and RBAC.
 	@echo "Generating manifests..."
 	cd pkg/client && go generate ./...
 	cd pkg/operator && go generate ./...
