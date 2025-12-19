@@ -83,7 +83,7 @@ func TestSerializeDeserializeFloatArrays(t *testing.T) {
 	}
 }
 
-func TestSerializeFloatArrays_WriteError(t *testing.T) {
+func TestSerializeFloatArrays_WriteErr(t *testing.T) {
 	// Test with a writer that fails after a certain number of writes
 	data := [][]float32{{1.0, 2.0, 3.0}, {4.0, 5.0, 6.0}}
 
@@ -93,7 +93,7 @@ func TestSerializeFloatArrays_WriteError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestDeserializeFloatArrays_ReadError(t *testing.T) {
+func TestDeserializeFloatArrays_ReadErr(t *testing.T) {
 	tests := []struct {
 		name    string
 		data    []byte

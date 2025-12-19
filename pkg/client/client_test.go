@@ -442,7 +442,7 @@ func TestClient_ContextCancellation(t *testing.T) {
 		strings.Contains(err.Error(), "cancel"))
 }
 
-func TestClient_ServerError(t *testing.T) {
+func TestClient_ServerErr(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
