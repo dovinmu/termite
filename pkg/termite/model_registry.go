@@ -52,6 +52,25 @@ func discoverModelVariants(modelPath string) map[string]string {
 	return variants
 }
 
+// isMultimodalModel checks if a model directory contains CLIP-style multimodal model files.
+// These models have visual_model.onnx + text_model.onnx instead of a single model.onnx.
+func isMultimodalModel(modelPath string) (hasStandard, hasQuantized bool) {
+	visualPath := filepath.Join(modelPath, "visual_model.onnx")
+	textPath := filepath.Join(modelPath, "text_model.onnx")
+	visualQuantizedPath := filepath.Join(modelPath, "visual_model_quantized.onnx")
+	textQuantizedPath := filepath.Join(modelPath, "text_model_quantized.onnx")
+
+	hasStandard = fileExistsRegistry(visualPath) && fileExistsRegistry(textPath)
+	hasQuantized = fileExistsRegistry(visualQuantizedPath) && fileExistsRegistry(textQuantizedPath)
+	return
+}
+
+// fileExistsRegistry checks if a file exists
+func fileExistsRegistry(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // ChunkerRegistry manages multiple chunker models loaded from a directory
 type ChunkerRegistry struct {
 	models map[string]chunking.Chunker // model name -> chunker instance
@@ -377,7 +396,49 @@ func NewEmbedderRegistry(modelsDir string, sessionManager *hugot.SessionManager,
 		modelName := entry.Name()
 		modelPath := filepath.Join(modelsDir, modelName)
 
-		// Discover all available model variants
+		// Check if this is a multimodal (CLIP-style) model
+		hasMultimodalStd, hasMultimodalQt := isMultimodalModel(modelPath)
+		if hasMultimodalStd || hasMultimodalQt {
+			logger.Info("Discovered multimodal embedder model directory",
+				zap.String("name", modelName),
+				zap.String("path", modelPath),
+				zap.Bool("has_standard", hasMultimodalStd),
+				zap.Bool("has_quantized", hasMultimodalQt))
+
+			// Load standard precision multimodal model
+			if hasMultimodalStd {
+				model, err := termembeddings.NewHugotCLIPEmbedder(modelPath, false, logger.Named(modelName))
+				if err != nil {
+					logger.Warn("Failed to load multimodal embedder model",
+						zap.String("name", modelName),
+						zap.Error(err))
+				} else {
+					registry.models[modelName] = model
+					logger.Info("Successfully loaded multimodal embedder model",
+						zap.String("name", modelName),
+						zap.String("type", "clip"))
+				}
+			}
+
+			// Load quantized multimodal model with suffix
+			if hasMultimodalQt {
+				quantizedName := modelName + "-i8-qt"
+				model, err := termembeddings.NewHugotCLIPEmbedder(modelPath, true, logger.Named(quantizedName))
+				if err != nil {
+					logger.Warn("Failed to load quantized multimodal embedder model",
+						zap.String("name", quantizedName),
+						zap.Error(err))
+				} else {
+					registry.models[quantizedName] = model
+					logger.Info("Successfully loaded quantized multimodal embedder model",
+						zap.String("name", quantizedName),
+						zap.String("type", "clip"))
+				}
+			}
+			continue // Skip standard embedder loading for multimodal models
+		}
+
+		// Discover all available model variants (standard embedders)
 		variants := discoverModelVariants(modelPath)
 
 		// Skip if no model files exist
@@ -472,6 +533,8 @@ func (r *EmbedderRegistry) Close() error {
 		case *termembeddings.HugotEmbedder:
 			err = emb.Close()
 		case *termembeddings.PooledHugotEmbedder:
+			err = emb.Close()
+		case *termembeddings.HugotCLIPEmbedder:
 			err = emb.Close()
 		}
 		if err != nil {

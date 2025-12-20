@@ -17,6 +17,8 @@
 package hugot
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/knights-analytics/hugot"
@@ -66,8 +68,41 @@ func (b *onnxDarwinBackend) Priority() int {
 func (b *onnxDarwinBackend) CreateSession(opts ...options.WithOption) (*hugot.Session, error) {
 	// Prepend CoreML provider - user options can override if needed
 	coremlOpts := []options.WithOption{options.WithCoreML(nil)}
+
+	// Check for custom library path from environment
+	if libPath := getOnnxLibraryPath(); libPath != "" {
+		coremlOpts = append(coremlOpts, options.WithOnnxLibraryPath(libPath))
+	}
+
 	opts = append(coremlOpts, opts...)
 	return hugot.NewORTSession(opts...)
+}
+
+// getOnnxLibraryPath returns the directory containing libonnxruntime.dylib from environment.
+// Checks ONNXRUNTIME_ROOT first, then DYLD_LIBRARY_PATH.
+func getOnnxLibraryPath() string {
+	// Check ONNXRUNTIME_ROOT (set by Makefile)
+	if root := os.Getenv("ONNXRUNTIME_ROOT"); root != "" {
+		// Try platform-specific path first
+		platformDir := filepath.Join(root, "darwin-arm64", "lib")
+		if _, err := os.Stat(filepath.Join(platformDir, "libonnxruntime.dylib")); err == nil {
+			return platformDir
+		}
+		// Try direct lib path
+		directDir := filepath.Join(root, "lib")
+		if _, err := os.Stat(filepath.Join(directDir, "libonnxruntime.dylib")); err == nil {
+			return directDir
+		}
+	}
+
+	// Check DYLD_LIBRARY_PATH
+	if dyldPath := os.Getenv("DYLD_LIBRARY_PATH"); dyldPath != "" {
+		if _, err := os.Stat(filepath.Join(dyldPath, "libonnxruntime.dylib")); err == nil {
+			return dyldPath
+		}
+	}
+
+	return ""
 }
 
 // SetGPUMode sets the GPU mode. On macOS, CoreML automatically uses the best
