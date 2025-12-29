@@ -24,10 +24,16 @@ import (
 
 	"github.com/knights-analytics/hugot"
 	"github.com/knights-analytics/hugot/options"
+	"github.com/knights-analytics/ortgenai"
 )
 
 func init() {
 	RegisterBackend(&onnxBackend{})
+
+	// Auto-detect and set GenAI library path
+	if genaiPath := getGenAILibraryPath(); genaiPath != "" {
+		ortgenai.SetSharedLibraryPath(genaiPath)
+	}
 }
 
 // onnxBackend implements Backend using ONNX Runtime (Linux/Windows).
@@ -115,6 +121,44 @@ func getOnnxLibraryPath() string {
 		for _, dir := range filepath.SplitList(ldPath) {
 			if _, err := os.Stat(filepath.Join(dir, "libonnxruntime.so")); err == nil {
 				return dir
+			}
+		}
+	}
+
+	return ""
+}
+
+// getGenAILibraryPath returns the path to libonnxruntime-genai.so.
+// Checks ORTGENAI_DYLIB_PATH first, then looks in the same locations as ONNX Runtime.
+func getGenAILibraryPath() string {
+	const libName = "libonnxruntime-genai.so"
+	platform := runtime.GOOS + "-" + runtime.GOARCH
+
+	// Check explicit ORTGENAI_DYLIB_PATH first
+	if path := os.Getenv("ORTGENAI_DYLIB_PATH"); path != "" {
+		return path
+	}
+
+	// Check ONNXRUNTIME_ROOT (GenAI libs are often installed alongside ONNX Runtime)
+	if root := os.Getenv("ONNXRUNTIME_ROOT"); root != "" {
+		// Try platform-specific path first
+		platformPath := filepath.Join(root, platform, "lib", libName)
+		if _, err := os.Stat(platformPath); err == nil {
+			return platformPath
+		}
+		// Try direct lib path
+		directPath := filepath.Join(root, "lib", libName)
+		if _, err := os.Stat(directPath); err == nil {
+			return directPath
+		}
+	}
+
+	// Check LD_LIBRARY_PATH
+	if ldPath := os.Getenv("LD_LIBRARY_PATH"); ldPath != "" {
+		for _, dir := range filepath.SplitList(ldPath) {
+			libPath := filepath.Join(dir, libName)
+			if _, err := os.Stat(libPath); err == nil {
+				return libPath
 			}
 		}
 	}

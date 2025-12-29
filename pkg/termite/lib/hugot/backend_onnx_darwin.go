@@ -23,10 +23,16 @@ import (
 
 	"github.com/knights-analytics/hugot"
 	"github.com/knights-analytics/hugot/options"
+	"github.com/knights-analytics/ortgenai"
 )
 
 func init() {
 	RegisterBackend(&onnxDarwinBackend{})
+
+	// Auto-detect and set GenAI library path
+	if genaiPath := getGenAILibraryPath(); genaiPath != "" {
+		ortgenai.SetSharedLibraryPath(genaiPath)
+	}
 }
 
 // onnxDarwinBackend implements Backend using ONNX Runtime with CoreML on macOS.
@@ -99,6 +105,41 @@ func getOnnxLibraryPath() string {
 	if dyldPath := os.Getenv("DYLD_LIBRARY_PATH"); dyldPath != "" {
 		if _, err := os.Stat(filepath.Join(dyldPath, "libonnxruntime.dylib")); err == nil {
 			return dyldPath
+		}
+	}
+
+	return ""
+}
+
+// getGenAILibraryPath returns the path to libonnxruntime-genai.dylib.
+// Checks ORTGENAI_DYLIB_PATH first, then looks in the same locations as ONNX Runtime.
+func getGenAILibraryPath() string {
+	const libName = "libonnxruntime-genai.dylib"
+
+	// Check explicit ORTGENAI_DYLIB_PATH first
+	if path := os.Getenv("ORTGENAI_DYLIB_PATH"); path != "" {
+		return path
+	}
+
+	// Check ONNXRUNTIME_ROOT (GenAI libs are often installed alongside ONNX Runtime)
+	if root := os.Getenv("ONNXRUNTIME_ROOT"); root != "" {
+		// Try platform-specific path first
+		platformPath := filepath.Join(root, "darwin-arm64", "lib", libName)
+		if _, err := os.Stat(platformPath); err == nil {
+			return platformPath
+		}
+		// Try direct lib path
+		directPath := filepath.Join(root, "lib", libName)
+		if _, err := os.Stat(directPath); err == nil {
+			return directPath
+		}
+	}
+
+	// Check DYLD_LIBRARY_PATH
+	if dyldPath := os.Getenv("DYLD_LIBRARY_PATH"); dyldPath != "" {
+		libPath := filepath.Join(dyldPath, libName)
+		if _, err := os.Stat(libPath); err == nil {
+			return libPath
 		}
 	}
 
