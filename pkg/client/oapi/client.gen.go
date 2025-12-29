@@ -458,8 +458,8 @@ type ChunkTextJSONRequestBody = ChunkRequest
 // GenerateEmbeddingsJSONRequestBody defines body for GenerateEmbeddings for application/json ContentType.
 type GenerateEmbeddingsJSONRequestBody = EmbedRequest
 
-// GenerateTextJSONRequestBody defines body for GenerateText for application/json ContentType.
-type GenerateTextJSONRequestBody = GenerateRequest
+// GenerateContentJSONRequestBody defines body for GenerateContent for application/json ContentType.
+type GenerateContentJSONRequestBody = GenerateRequest
 
 // GenerateQuestionsJSONRequestBody defines body for GenerateQuestions for application/json ContentType.
 type GenerateQuestionsJSONRequestBody = QuestionGenerateRequest
@@ -703,10 +703,10 @@ type ClientInterface interface {
 
 	GenerateEmbeddings(ctx context.Context, body GenerateEmbeddingsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// GenerateTextWithBody request with any body
-	GenerateTextWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// GenerateContentWithBody request with any body
+	GenerateContentWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	GenerateText(ctx context.Context, body GenerateTextJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	GenerateContent(ctx context.Context, body GenerateContentJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListModels request
 	ListModels(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -778,8 +778,8 @@ func (c *Client) GenerateEmbeddings(ctx context.Context, body GenerateEmbeddings
 	return c.Client.Do(req)
 }
 
-func (c *Client) GenerateTextWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGenerateTextRequestWithBody(c.Server, contentType, body)
+func (c *Client) GenerateContentWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGenerateContentRequestWithBody(c.Server, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -790,8 +790,8 @@ func (c *Client) GenerateTextWithBody(ctx context.Context, contentType string, b
 	return c.Client.Do(req)
 }
 
-func (c *Client) GenerateText(ctx context.Context, body GenerateTextJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGenerateTextRequest(c.Server, body)
+func (c *Client) GenerateContent(ctx context.Context, body GenerateContentJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGenerateContentRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -978,19 +978,19 @@ func NewGenerateEmbeddingsRequestWithBody(server string, contentType string, bod
 	return req, nil
 }
 
-// NewGenerateTextRequest calls the generic GenerateText builder with application/json body
-func NewGenerateTextRequest(server string, body GenerateTextJSONRequestBody) (*http.Request, error) {
+// NewGenerateContentRequest calls the generic GenerateContent builder with application/json body
+func NewGenerateContentRequest(server string, body GenerateContentJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewGenerateTextRequestWithBody(server, "application/json", bodyReader)
+	return NewGenerateContentRequestWithBody(server, "application/json", bodyReader)
 }
 
-// NewGenerateTextRequestWithBody generates requests for GenerateText with any type of body
-func NewGenerateTextRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+// NewGenerateContentRequestWithBody generates requests for GenerateContent with any type of body
+func NewGenerateContentRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -1245,10 +1245,10 @@ type ClientWithResponsesInterface interface {
 
 	GenerateEmbeddingsWithResponse(ctx context.Context, body GenerateEmbeddingsJSONRequestBody, reqEditors ...RequestEditorFn) (*GenerateEmbeddingsResponse, error)
 
-	// GenerateTextWithBodyWithResponse request with any body
-	GenerateTextWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*GenerateTextResponse, error)
+	// GenerateContentWithBodyWithResponse request with any body
+	GenerateContentWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*GenerateContentResponse, error)
 
-	GenerateTextWithResponse(ctx context.Context, body GenerateTextJSONRequestBody, reqEditors ...RequestEditorFn) (*GenerateTextResponse, error)
+	GenerateContentWithResponse(ctx context.Context, body GenerateContentJSONRequestBody, reqEditors ...RequestEditorFn) (*GenerateContentResponse, error)
 
 	// ListModelsWithResponse request
 	ListModelsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListModelsResponse, error)
@@ -1321,7 +1321,7 @@ func (r GenerateEmbeddingsResponse) StatusCode() int {
 	return 0
 }
 
-type GenerateTextResponse struct {
+type GenerateContentResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *GenerateResponse
@@ -1332,7 +1332,7 @@ type GenerateTextResponse struct {
 }
 
 // Status returns HTTPResponse.Status
-func (r GenerateTextResponse) Status() string {
+func (r GenerateContentResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -1340,7 +1340,7 @@ func (r GenerateTextResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r GenerateTextResponse) StatusCode() int {
+func (r GenerateContentResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -1506,21 +1506,21 @@ func (c *ClientWithResponses) GenerateEmbeddingsWithResponse(ctx context.Context
 	return ParseGenerateEmbeddingsResponse(rsp)
 }
 
-// GenerateTextWithBodyWithResponse request with arbitrary body returning *GenerateTextResponse
-func (c *ClientWithResponses) GenerateTextWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*GenerateTextResponse, error) {
-	rsp, err := c.GenerateTextWithBody(ctx, contentType, body, reqEditors...)
+// GenerateContentWithBodyWithResponse request with arbitrary body returning *GenerateContentResponse
+func (c *ClientWithResponses) GenerateContentWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*GenerateContentResponse, error) {
+	rsp, err := c.GenerateContentWithBody(ctx, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseGenerateTextResponse(rsp)
+	return ParseGenerateContentResponse(rsp)
 }
 
-func (c *ClientWithResponses) GenerateTextWithResponse(ctx context.Context, body GenerateTextJSONRequestBody, reqEditors ...RequestEditorFn) (*GenerateTextResponse, error) {
-	rsp, err := c.GenerateText(ctx, body, reqEditors...)
+func (c *ClientWithResponses) GenerateContentWithResponse(ctx context.Context, body GenerateContentJSONRequestBody, reqEditors ...RequestEditorFn) (*GenerateContentResponse, error) {
+	rsp, err := c.GenerateContent(ctx, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseGenerateTextResponse(rsp)
+	return ParseGenerateContentResponse(rsp)
 }
 
 // ListModelsWithResponse request returning *ListModelsResponse
@@ -1682,15 +1682,15 @@ func ParseGenerateEmbeddingsResponse(rsp *http.Response) (*GenerateEmbeddingsRes
 	return response, nil
 }
 
-// ParseGenerateTextResponse parses an HTTP response from a GenerateTextWithResponse call
-func ParseGenerateTextResponse(rsp *http.Response) (*GenerateTextResponse, error) {
+// ParseGenerateContentResponse parses an HTTP response from a GenerateContentWithResponse call
+func ParseGenerateContentResponse(rsp *http.Response) (*GenerateContentResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &GenerateTextResponse{
+	response := &GenerateContentResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -2103,27 +2103,28 @@ var swaggerSpec = []string{
 	"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",
-	"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",
+	"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",
+	"igAA",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

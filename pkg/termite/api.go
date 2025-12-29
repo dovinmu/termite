@@ -19,6 +19,9 @@ package termite
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -71,8 +74,8 @@ func (t *TermiteAPI) RerankPrompts(w http.ResponseWriter, r *http.Request) {
 	t.node.handleApiRerank(w, r)
 }
 
-// GenerateText implements ServerInterface
-func (t *TermiteAPI) GenerateText(w http.ResponseWriter, r *http.Request) {
+// GenerateContent implements ServerInterface
+func (t *TermiteAPI) GenerateContent(w http.ResponseWriter, r *http.Request) {
 	t.node.handleApiGenerate(w, r)
 }
 
@@ -689,7 +692,14 @@ func (ln *TermiteNode) handleApiRecognize(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// handleApiGenerate handles text generation requests using LLM models
+// generateCompletionID generates a unique ID like OpenAI's "chatcmpl-xxx" format
+func generateCompletionID() string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	return "chatcmpl-" + hex.EncodeToString(b)
+}
+
+// handleApiGenerate handles text generation requests using LLM models (OpenAI-compatible)
 func (ln *TermiteNode) handleApiGenerate(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = r.Body.Close() }()
 
@@ -755,8 +765,8 @@ func (ln *TermiteNode) handleApiGenerate(w http.ResponseWriter, r *http.Request)
 	// Set options from request, using defaults for zero values
 	opts := generation.GenerateOptions{
 		MaxTokens:   256,
-		Temperature: 0.7,
-		TopP:        0.9,
+		Temperature: 1.0,
+		TopP:        1.0,
 		TopK:        50,
 	}
 	if req.MaxTokens > 0 {
@@ -772,7 +782,17 @@ func (ln *TermiteNode) handleApiGenerate(w http.ResponseWriter, r *http.Request)
 		opts.TopK = req.TopK
 	}
 
-	// Generate text
+	// Generate completion ID and timestamp
+	completionID := generateCompletionID()
+	created := int(time.Now().Unix())
+
+	// Handle streaming vs non-streaming
+	if req.Stream {
+		ln.handleStreamingGenerate(w, r, req, generator, messages, opts, completionID, created)
+		return
+	}
+
+	// Non-streaming: Generate text
 	result, err := generator.Generate(r.Context(), messages, opts)
 	if err != nil {
 		ln.logger.Error("generation failed",
@@ -792,12 +812,44 @@ func (ln *TermiteNode) handleApiGenerate(w http.ResponseWriter, r *http.Request)
 		zap.Int("num_messages", len(req.Messages)),
 		zap.Int("tokens_generated", result.TokensUsed))
 
-	// Send response
+	// Map finish reason
+	var finishReason FinishReason
+	switch result.FinishReason {
+	case "length":
+		finishReason = FinishReasonLength
+	default:
+		finishReason = FinishReasonStop
+	}
+
+	// Estimate prompt tokens (rough estimate based on message content length)
+	// TODO: Use actual tokenizer for accurate count
+	promptTokens := 0
+	for _, m := range req.Messages {
+		promptTokens += len(m.Content) / 4 // Rough estimate: ~4 chars per token
+	}
+
+	// Build OpenAI-compatible response
 	resp := GenerateResponse{
-		Model:        req.Model,
-		Text:         result.Text,
-		TokensUsed:   result.TokensUsed,
-		FinishReason: GenerateResponseFinishReason(result.FinishReason),
+		Id:      completionID,
+		Object:  GenerateResponseObjectChatCompletion,
+		Created: created,
+		Model:   req.Model,
+		Choices: []GenerateChoice{
+			{
+				Index: 0,
+				Message: GenerateMessage{
+					Role:    RoleAssistant,
+					Content: result.Text,
+				},
+				FinishReason: finishReason,
+				Logprobs:     nil,
+			},
+		},
+		Usage: GenerateUsage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: result.TokensUsed,
+			TotalTokens:      promptTokens + result.TokensUsed,
+		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -806,6 +858,119 @@ func (ln *TermiteNode) handleApiGenerate(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+}
+
+// handleStreamingGenerate handles streaming generation with SSE
+func (ln *TermiteNode) handleStreamingGenerate(
+	w http.ResponseWriter,
+	r *http.Request,
+	req GenerateRequest,
+	generator generation.Generator,
+	messages []generation.Message,
+	opts generation.GenerateOptions,
+	completionID string,
+	created int,
+) {
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// For now, generate the full response and simulate streaming
+	// TODO: Implement true token-by-token streaming when generator supports it
+	result, err := generator.Generate(r.Context(), messages, opts)
+	if err != nil {
+		ln.logger.Error("streaming generation failed",
+			zap.String("model", req.Model),
+			zap.Error(err))
+		// Send error as SSE event
+		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())
+		flusher.Flush()
+		return
+	}
+
+	// Record metrics
+	RecordGeneratorRequest(req.Model)
+	RecordTokenGeneration(req.Model, result.TokensUsed)
+
+	// Send first chunk with role
+	firstChunk := GenerateChunk{
+		Id:      completionID,
+		Object:  GenerateChunkObjectChatCompletionChunk,
+		Created: created,
+		Model:   req.Model,
+		Choices: []GenerateChunkChoice{
+			{
+				Index: 0,
+				Delta: GenerateDelta{
+					Role: RoleAssistant,
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(firstChunk)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+
+	// Send content chunk
+	contentChunk := GenerateChunk{
+		Id:      completionID,
+		Object:  GenerateChunkObjectChatCompletionChunk,
+		Created: created,
+		Model:   req.Model,
+		Choices: []GenerateChunkChoice{
+			{
+				Index: 0,
+				Delta: GenerateDelta{
+					Content: result.Text,
+				},
+			},
+		},
+	}
+	data, _ = json.Marshal(contentChunk)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+
+	// Send final chunk with finish_reason
+	var chunkFinishReason FinishReason
+	switch result.FinishReason {
+	case "length":
+		chunkFinishReason = FinishReasonLength
+	default:
+		chunkFinishReason = FinishReasonStop
+	}
+
+	finalChunk := GenerateChunk{
+		Id:      completionID,
+		Object:  GenerateChunkObjectChatCompletionChunk,
+		Created: created,
+		Model:   req.Model,
+		Choices: []GenerateChunkChoice{
+			{
+				Index:        0,
+				Delta:        GenerateDelta{},
+				FinishReason: chunkFinishReason,
+			},
+		},
+	}
+	data, _ = json.Marshal(finalChunk)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+
+	// Send [DONE] signal
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+
+	ln.logger.Info("streaming generation completed",
+		zap.String("model", req.Model),
+		zap.Int("tokens_generated", result.TokensUsed))
 }
 
 // handleApiQuestionate handles Seq2Seq question generation requests

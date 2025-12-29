@@ -482,6 +482,16 @@ components:
           example: ["flan-t5-small", "lmqg-question-generation"]
 
     # Generation Types (LLM/Chat)
+    Role:
+      type: string
+      enum: [system, user, assistant]
+      description: The role of a message sender in a conversation
+
+    FinishReason:
+      type: string
+      enum: [stop, length]
+      description: Reason why generation stopped
+
     ChatMessage:
       type: object
       required:
@@ -489,9 +499,7 @@ components:
         - content
       properties:
         role:
-          type: string
-          enum: [system, user, assistant]
-          description: The role of the message sender
+          $ref: "#/components/schemas/Role"
         content:
           type: string
           description: The message content
@@ -520,37 +528,153 @@ components:
           type: number
           format: float
           description: Sampling temperature (0.0 = deterministic, higher = more random)
-          default: 0.7
+          default: 1.0
           example: 0.7
         top_p:
           type: number
           format: float
           description: Nucleus sampling probability
-          default: 0.9
+          default: 1.0
         top_k:
           type: integer
-          description: Top-k sampling
+          description: Top-k sampling (Termite extension, not in OpenAI API)
           default: 50
+        stream:
+          type: boolean
+          description: If true, partial message deltas will be sent as SSE events
+          default: false
 
     GenerateResponse:
       type: object
+      description: OpenAI-compatible chat completion response
       required:
+        - id
+        - object
+        - created
         - model
-        - text
+        - choices
+        - usage
       properties:
+        id:
+          type: string
+          description: A unique identifier for the chat completion
+          example: "chatcmpl-abc123"
+        object:
+          type: string
+          enum: ["chat.completion"]
+          description: The object type, always "chat.completion"
+        created:
+          type: integer
+          description: Unix timestamp (seconds) when the completion was created
+          example: 1704123456
         model:
           type: string
           description: Model used for generation
-        text:
-          type: string
-          description: Generated text
-        tokens_used:
+        choices:
+          type: array
+          items:
+            $ref: "#/components/schemas/GenerateChoice"
+          description: List of completion choices (currently always 1)
+        usage:
+          $ref: "#/components/schemas/GenerateUsage"
+
+    GenerateChoice:
+      type: object
+      required:
+        - index
+        - message
+        - finish_reason
+      properties:
+        index:
           type: integer
-          description: Number of tokens generated
+          description: Index of this choice in the list
+        message:
+          $ref: "#/components/schemas/GenerateMessage"
         finish_reason:
+          allOf:
+            - $ref: "#/components/schemas/FinishReason"
+          nullable: true
+        logprobs:
+          type: object
+          nullable: true
+          description: Log probability information (not supported, always null)
+
+    GenerateMessage:
+      type: object
+      required:
+        - role
+        - content
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+        content:
           type: string
-          enum: [stop, length]
-          description: Why generation stopped
+          description: The generated message content
+
+    GenerateUsage:
+      type: object
+      required:
+        - prompt_tokens
+        - completion_tokens
+        - total_tokens
+      properties:
+        prompt_tokens:
+          type: integer
+          description: Number of tokens in the prompt
+        completion_tokens:
+          type: integer
+          description: Number of tokens in the completion
+        total_tokens:
+          type: integer
+          description: Total tokens used (prompt + completion)
+
+    GenerateChunk:
+      type: object
+      description: Streaming generation chunk (SSE event data)
+      required:
+        - id
+        - object
+        - created
+        - model
+        - choices
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          enum: ["chat.completion.chunk"]
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            $ref: "#/components/schemas/GenerateChunkChoice"
+
+    GenerateChunkChoice:
+      type: object
+      required:
+        - index
+        - delta
+      properties:
+        index:
+          type: integer
+        delta:
+          $ref: "#/components/schemas/GenerateDelta"
+        finish_reason:
+          $ref: "#/components/schemas/FinishReason"
+
+    GenerateDelta:
+      type: object
+      description: Delta content for streaming
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+        content:
+          type: string
+          nullable: true
+          description: Token content delta
 
     Config:
       type: object
@@ -949,14 +1073,21 @@ paths:
 
   /generate:
     post:
-      summary: Generate text using LLM
+      summary: Generate text using LLM (OpenAI-compatible)
       description: |
         Generates text using local LLM models (e.g., Gemma 3).
+        Fully compatible with the OpenAI Chat Completions API.
 
         ## Models
 
         Models are auto-discovered from `models_dir/generators/` at startup.
         Use the `/api/models` endpoint to list available models.
+
+        ## Streaming
+
+        Set `stream: true` to receive Server-Sent Events (SSE) with incremental
+        token deltas. Each event contains a `ChatCompletionChunk` object.
+        The stream ends with `data: [DONE]`.
 
         ## Input Format
 
@@ -968,11 +1099,12 @@ paths:
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Hello!"}
           ],
-          "max_tokens": 256
+          "max_tokens": 256,
+          "stream": false
         }
         ```
 
-        ## Example
+        ## Example (Non-streaming)
 
         ```bash
         curl -X POST http://localhost:8080/api/generate \
@@ -983,7 +1115,19 @@ paths:
             "max_tokens": 100
           }'
         ```
-      operationId: generateText
+
+        ## Example (Streaming)
+
+        ```bash
+        curl -X POST http://localhost:8080/api/generate \
+          -H "Content-Type: application/json" \
+          -d '{
+            "model": "gemma-3-1b-it",
+            "messages": [{"role": "user", "content": "Hello!"}],
+            "stream": true
+          }'
+        ```
+      operationId: generateContent
       requestBody:
         required: true
         content:
@@ -992,11 +1136,20 @@ paths:
               $ref: "#/components/schemas/GenerateRequest"
       responses:
         "200":
-          description: Text generated successfully
+          description: |
+            Chat completion response. Returns JSON for non-streaming requests,
+            or Server-Sent Events for streaming requests (stream: true).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/GenerateResponse"
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Stream of SSE events containing ChatCompletionChunk objects.
+                  Each line is prefixed with "data: " followed by JSON.
+                  Stream ends with "data: [DONE]".
         "400":
           description: Invalid request
           content:
