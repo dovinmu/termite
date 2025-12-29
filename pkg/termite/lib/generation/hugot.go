@@ -121,6 +121,65 @@ func NewHugotGeneratorWithSession(modelPath string, sharedSession *khugot.Sessio
 	}, nil
 }
 
+// NewHugotGeneratorWithSessionManager creates a new generator using a SessionManager.
+// This is the preferred way to create generators when using shared session management.
+// Returns the generator, the backend type used, and any error.
+func NewHugotGeneratorWithSessionManager(modelPath string, sessionManager *hugot.SessionManager, modelBackends []string, logger *zap.Logger) (*HugotGenerator, hugot.BackendType, error) {
+	if modelPath == "" {
+		return nil, "", errors.New("model path is required")
+	}
+
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	if sessionManager == nil {
+		// Fall back to creating a new session
+		model, err := NewHugotGeneratorWithSession(modelPath, nil, logger)
+		if err != nil {
+			return nil, "", err
+		}
+		return model, hugot.BackendType(""), nil
+	}
+
+	logger.Info("Initializing Hugot generator with SessionManager",
+		zap.String("modelPath", modelPath))
+
+	// Get session from SessionManager with backend restrictions
+	session, backendUsed, err := sessionManager.GetSessionForModel(modelBackends)
+	if err != nil {
+		return nil, "", fmt.Errorf("getting session from manager: %w", err)
+	}
+
+	logger.Info("Got session from SessionManager",
+		zap.String("backend", string(backendUsed)))
+
+	// Create text generation pipeline configuration
+	pipelineName := fmt.Sprintf("generator:%s", modelPath)
+	pipelineConfig := khugot.TextGenerationConfig{
+		ModelPath: modelPath,
+		Name:      pipelineName,
+		Options: []backends.PipelineOption[*pipelines.TextGenerationPipeline]{
+			pipelines.WithMaxLength(2048),
+		},
+	}
+
+	// Create the pipeline
+	pipeline, err := khugot.NewPipeline(session, pipelineConfig)
+	if err != nil {
+		logger.Error("Failed to create pipeline", zap.Error(err))
+		return nil, "", fmt.Errorf("creating text generation pipeline: %w", err)
+	}
+	logger.Info("Successfully created text generation pipeline")
+
+	return &HugotGenerator{
+		session:       session,
+		pipeline:      pipeline,
+		logger:        logger,
+		sessionShared: true, // SessionManager-provided sessions are always shared
+	}, backendUsed, nil
+}
+
 // Generate produces text from the given messages.
 func (g *HugotGenerator) Generate(ctx context.Context, messages []Message, opts GenerateOptions) (*GenerateResult, error) {
 	if len(messages) == 0 {

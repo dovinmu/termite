@@ -28,48 +28,59 @@ import (
 	"github.com/antflydb/antfly-go/libaf/reranking"
 	termchunking "github.com/antflydb/termite/pkg/termite/lib/chunking"
 	termembeddings "github.com/antflydb/termite/pkg/termite/lib/embeddings"
-	"github.com/antflydb/termite/pkg/termite/lib/generation"
+	"github.com/antflydb/termite/pkg/termite/lib/gliner"
+	"github.com/antflydb/termite/pkg/termite/lib/hugot"
 	"github.com/antflydb/termite/pkg/termite/lib/modelregistry"
+	"github.com/antflydb/termite/pkg/termite/lib/ner"
 	termreranking "github.com/antflydb/termite/pkg/termite/lib/reranking"
-	khugot "github.com/knights-analytics/hugot"
+	"github.com/antflydb/termite/pkg/termite/lib/seq2seq"
+	"github.com/antflydb/termite/pkg/termite/lib/generation"
 	"go.uber.org/zap"
 )
 
 // discoverModelVariants scans a model directory and returns a map of variant ID to ONNX filename.
 // The default FP32 model (model.onnx) is returned with an empty string key.
-// It checks both the root directory and an "onnx/" subdirectory (common for onnx-community models).
 func discoverModelVariants(modelPath string) map[string]string {
 	variants := make(map[string]string)
+	usedFilenames := make(map[string]bool)
 
-	// Directories to check for ONNX files (root and onnx/ subdirectory)
-	searchDirs := []string{"", "onnx"}
+	// Check for standard FP32 model
+	if _, err := os.Stat(filepath.Join(modelPath, "model.onnx")); err == nil {
+		variants[""] = "model.onnx" // Empty key = default/FP32
+		usedFilenames["model.onnx"] = true
+	}
 
-	for _, subdir := range searchDirs {
-		searchPath := modelPath
-		prefix := ""
-		if subdir != "" {
-			searchPath = filepath.Join(modelPath, subdir)
-			prefix = subdir + "/"
+	// Check for all known variant files, but skip if filename already used
+	for variantID, filename := range modelregistry.VariantFilenames {
+		if usedFilenames[filename] {
+			continue // Skip duplicates (e.g., f32 uses same model.onnx as default)
 		}
-
-		// Check for standard FP32 model
-		if _, err := os.Stat(filepath.Join(searchPath, "model.onnx")); err == nil {
-			if _, exists := variants[""]; !exists {
-				variants[""] = prefix + "model.onnx" // Empty key = default/FP32
-			}
-		}
-
-		// Check for all known variant files
-		for variantID, filename := range modelregistry.VariantFilenames {
-			if _, err := os.Stat(filepath.Join(searchPath, filename)); err == nil {
-				if _, exists := variants[variantID]; !exists {
-					variants[variantID] = prefix + filename
-				}
-			}
+		if _, err := os.Stat(filepath.Join(modelPath, filename)); err == nil {
+			variants[variantID] = filename
+			usedFilenames[filename] = true
 		}
 	}
 
 	return variants
+}
+
+// isMultimodalModel checks if a model directory contains CLIP-style multimodal model files.
+// These models have visual_model.onnx + text_model.onnx instead of a single model.onnx.
+func isMultimodalModel(modelPath string) (hasStandard, hasQuantized bool) {
+	visualPath := filepath.Join(modelPath, "visual_model.onnx")
+	textPath := filepath.Join(modelPath, "text_model.onnx")
+	visualQuantizedPath := filepath.Join(modelPath, "visual_model_quantized.onnx")
+	textQuantizedPath := filepath.Join(modelPath, "text_model_quantized.onnx")
+
+	hasStandard = fileExistsRegistry(visualPath) && fileExistsRegistry(textPath)
+	hasQuantized = fileExistsRegistry(visualQuantizedPath) && fileExistsRegistry(textQuantizedPath)
+	return
+}
+
+// fileExistsRegistry checks if a file exists
+func fileExistsRegistry(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // ChunkerRegistry manages multiple chunker models loaded from a directory
@@ -81,8 +92,8 @@ type ChunkerRegistry struct {
 
 // NewChunkerRegistry creates a registry and discovers models in the given directory
 // Directory structure: modelsDir/model_name/model.onnx
-// If sharedSession is provided, all models will share the same Hugot session (required for ONNX Runtime)
-func NewChunkerRegistry(modelsDir string, sharedSession *khugot.Session, logger *zap.Logger) (*ChunkerRegistry, error) {
+// If sessionManager is provided, it will be used to obtain sessions for model loading (required for ONNX Runtime)
+func NewChunkerRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*ChunkerRegistry, error) {
 	registry := &ChunkerRegistry{
 		models: make(map[string]chunking.Chunker),
 		logger: logger,
@@ -153,8 +164,8 @@ func NewChunkerRegistry(modelsDir string, sharedSession *khugot.Session, logger 
 			// Create chunker config for this model with sensible defaults
 			config := termchunking.DefaultHugotChunkerConfig()
 
-			// Pass model path, ONNX filename, and shared session to pooled chunker
-			chunker, err := termchunking.NewPooledHugotChunkerWithSession(config, modelPath, onnxFilename, poolSize, sharedSession, logger.Named(registryName))
+			// Pass model path, ONNX filename, and session manager to pooled chunker
+			chunker, backendUsed, err := termchunking.NewPooledHugotChunkerWithSessionManager(config, modelPath, onnxFilename, poolSize, sessionManager, nil, logger.Named(registryName))
 			if err != nil {
 				logger.Warn("Failed to load chunker model variant",
 					zap.String("name", registryName),
@@ -165,6 +176,7 @@ func NewChunkerRegistry(modelsDir string, sharedSession *khugot.Session, logger 
 				logger.Info("Successfully loaded chunker model",
 					zap.String("name", registryName),
 					zap.String("onnxFile", onnxFilename),
+					zap.String("backend", string(backendUsed)),
 					zap.Int("poolSize", poolSize))
 			}
 		}
@@ -223,8 +235,8 @@ type RerankerRegistry struct {
 }
 
 // NewRerankerRegistry creates a registry and discovers models in the given directory
-// If sharedSession is provided, all models will share the same Hugot session (required for ONNX Runtime)
-func NewRerankerRegistry(modelsDir string, sharedSession *khugot.Session, logger *zap.Logger) (*RerankerRegistry, error) {
+// If sessionManager is provided, it will be used to obtain sessions for model loading (required for ONNX Runtime)
+func NewRerankerRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*RerankerRegistry, error) {
 	registry := &RerankerRegistry{
 		models: make(map[string]reranking.Model),
 		logger: logger,
@@ -292,8 +304,8 @@ func NewRerankerRegistry(modelsDir string, sharedSession *khugot.Session, logger
 				registryName = modelName + "-" + variantID
 			}
 
-			// Pass model path, ONNX filename, and shared session to pooled reranker
-			model, err := termreranking.NewPooledHugotRerankerWithSession(modelPath, onnxFilename, poolSize, sharedSession, logger.Named(registryName))
+			// Pass model path, ONNX filename, and session manager to pooled reranker
+			model, backendUsed, err := termreranking.NewPooledHugotRerankerWithSessionManager(modelPath, onnxFilename, poolSize, sessionManager, nil, logger.Named(registryName))
 			if err != nil {
 				logger.Warn("Failed to load reranker model variant",
 					zap.String("name", registryName),
@@ -304,6 +316,7 @@ func NewRerankerRegistry(modelsDir string, sharedSession *khugot.Session, logger
 				logger.Info("Successfully loaded reranker model",
 					zap.String("name", registryName),
 					zap.String("onnxFile", onnxFilename),
+					zap.String("backend", string(backendUsed)),
 					zap.Int("poolSize", poolSize))
 			}
 		}
@@ -362,8 +375,8 @@ type EmbedderRegistry struct {
 }
 
 // NewEmbedderRegistry creates a registry and discovers models in the given directory
-// If sharedSession is provided, all models will share the same Hugot session (required for ONNX Runtime)
-func NewEmbedderRegistry(modelsDir string, sharedSession *khugot.Session, logger *zap.Logger) (*EmbedderRegistry, error) {
+// If sessionManager is provided, it will be used to obtain sessions for model loading (required for ONNX Runtime)
+func NewEmbedderRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*EmbedderRegistry, error) {
 	registry := &EmbedderRegistry{
 		models: make(map[string]embeddings.Embedder),
 		logger: logger,
@@ -395,7 +408,51 @@ func NewEmbedderRegistry(modelsDir string, sharedSession *khugot.Session, logger
 		modelName := entry.Name()
 		modelPath := filepath.Join(modelsDir, modelName)
 
-		// Discover all available model variants
+		// Check if this is a multimodal (CLIP-style) model
+		hasMultimodalStd, hasMultimodalQt := isMultimodalModel(modelPath)
+		if hasMultimodalStd || hasMultimodalQt {
+			logger.Info("Discovered multimodal embedder model directory",
+				zap.String("name", modelName),
+				zap.String("path", modelPath),
+				zap.Bool("has_standard", hasMultimodalStd),
+				zap.Bool("has_quantized", hasMultimodalQt))
+
+			// Load standard precision multimodal model
+			if hasMultimodalStd {
+				model, backendUsed, err := termembeddings.NewHugotCLIPEmbedderWithSessionManager(modelPath, false, sessionManager, nil, logger.Named(modelName))
+				if err != nil {
+					logger.Warn("Failed to load multimodal embedder model",
+						zap.String("name", modelName),
+						zap.Error(err))
+				} else {
+					registry.models[modelName] = model
+					logger.Info("Successfully loaded multimodal embedder model",
+						zap.String("name", modelName),
+						zap.String("type", "clip"),
+						zap.String("backend", string(backendUsed)))
+				}
+			}
+
+			// Load quantized multimodal model with suffix
+			if hasMultimodalQt {
+				quantizedName := modelName + "-i8-qt"
+				model, backendUsed, err := termembeddings.NewHugotCLIPEmbedderWithSessionManager(modelPath, true, sessionManager, nil, logger.Named(quantizedName))
+				if err != nil {
+					logger.Warn("Failed to load quantized multimodal embedder model",
+						zap.String("name", quantizedName),
+						zap.Error(err))
+				} else {
+					registry.models[quantizedName] = model
+					logger.Info("Successfully loaded quantized multimodal embedder model",
+						zap.String("name", quantizedName),
+						zap.String("type", "clip"),
+						zap.String("backend", string(backendUsed)))
+				}
+			}
+			continue // Skip standard embedder loading for multimodal models
+		}
+
+		// Discover all available model variants (standard embedders)
 		variants := discoverModelVariants(modelPath)
 
 		// Skip if no model files exist
@@ -431,8 +488,8 @@ func NewEmbedderRegistry(modelsDir string, sharedSession *khugot.Session, logger
 				registryName = modelName + "-" + variantID
 			}
 
-			// Pass model path, ONNX filename, and shared session to pooled embedder
-			model, err := termembeddings.NewPooledHugotEmbedderWithSession(modelPath, onnxFilename, poolSize, sharedSession, logger.Named(registryName))
+			// Pass model path, ONNX filename, and session manager to pooled embedder
+			model, backendUsed, err := termembeddings.NewPooledHugotEmbedderWithSessionManager(modelPath, onnxFilename, poolSize, sessionManager, nil, logger.Named(registryName))
 			if err != nil {
 				logger.Warn("Failed to load embedder model variant",
 					zap.String("name", registryName),
@@ -443,6 +500,7 @@ func NewEmbedderRegistry(modelsDir string, sharedSession *khugot.Session, logger
 				logger.Info("Successfully loaded embedder model",
 					zap.String("name", registryName),
 					zap.String("onnxFile", onnxFilename),
+					zap.String("backend", string(backendUsed)),
 					zap.Int("poolSize", poolSize))
 			}
 		}
@@ -486,13 +544,357 @@ func (r *EmbedderRegistry) Close() error {
 	for name, model := range r.models {
 		var err error
 		switch emb := model.(type) {
-		case *termembeddings.HugotEmbedder:
-			err = emb.Close()
 		case *termembeddings.PooledHugotEmbedder:
+			err = emb.Close()
+		case *termembeddings.HugotCLIPEmbedder:
 			err = emb.Close()
 		}
 		if err != nil {
 			r.logger.Warn("Error closing embedder model",
+				zap.String("name", name),
+				zap.Error(err))
+		}
+	}
+	return nil
+}
+
+// NERRegistry manages multiple NER (Named Entity Recognition) models loaded from a directory
+type NERRegistry struct {
+	models      map[string]ner.Model      // model name -> NER model instance
+	recognizers map[string]ner.Recognizer // model name -> zero-shot capable Recognizer (e.g., GLiNER)
+	mu          sync.RWMutex
+	logger      *zap.Logger
+}
+
+// NewNERRegistry creates a registry and discovers NER models in the given directory
+// If sessionManager is provided, all models will use it for backend selection (required for ONNX Runtime)
+func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*NERRegistry, error) {
+	registry := &NERRegistry{
+		models:      make(map[string]ner.Model),
+		recognizers: make(map[string]ner.Recognizer),
+		logger:      logger,
+	}
+
+	if modelsDir == "" {
+		logger.Info("No NER models directory configured")
+		return registry, nil
+	}
+
+	// Check if directory exists
+	if _, err := os.Stat(modelsDir); os.IsNotExist(err) {
+		logger.Warn("NER models directory does not exist",
+			zap.String("dir", modelsDir))
+		return registry, nil
+	}
+
+	// Scan directory for model subdirectories
+	entries, err := os.ReadDir(modelsDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading NER models directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		modelName := entry.Name()
+		modelPath := filepath.Join(modelsDir, modelName)
+
+		// Check if this is a GLiNER model
+		isGLiNER := gliner.IsGLiNERModel(modelPath)
+
+		if isGLiNER {
+			// Load GLiNER model (no variants, uses model.onnx or model_quantized.onnx)
+			logger.Info("Discovered GLiNER model directory",
+				zap.String("name", modelName),
+				zap.String("path", modelPath))
+
+			// Try quantized first, then non-quantized
+			quantized := false
+			if _, err := os.Stat(filepath.Join(modelPath, "model_quantized.onnx")); err == nil {
+				quantized = true
+			} else if _, err := os.Stat(filepath.Join(modelPath, "model.onnx")); err != nil {
+				logger.Debug("Skipping GLiNER directory without model files",
+					zap.String("dir", modelName))
+				continue
+			}
+
+			model, backendUsed, err := gliner.NewHugotGLiNERWithSessionManager(modelPath, quantized, sessionManager, nil, logger.Named(modelName))
+			if err != nil {
+				logger.Warn("Failed to load GLiNER model",
+					zap.String("name", modelName),
+					zap.Bool("quantized", quantized),
+					zap.Error(err))
+			} else {
+				registry.recognizers[modelName] = model
+				registry.models[modelName] = model // Also register as regular Model for compatibility
+				logger.Info("Successfully loaded GLiNER model",
+					zap.String("name", modelName),
+					zap.Bool("quantized", quantized),
+					zap.String("backend", string(backendUsed)),
+					zap.Strings("default_labels", model.Labels()))
+			}
+		} else {
+			// Discover all available model variants for regular NER models
+			variants := discoverModelVariants(modelPath)
+
+			// Skip if no model files exist
+			if len(variants) == 0 {
+				logger.Debug("Skipping directory without model files",
+					zap.String("dir", modelName))
+				continue
+			}
+
+			// Log discovered variants
+			variantIDs := make([]string, 0, len(variants))
+			for v := range variants {
+				if v == "" {
+					variantIDs = append(variantIDs, "default")
+				} else {
+					variantIDs = append(variantIDs, v)
+				}
+			}
+			logger.Info("Discovered NER model directory",
+				zap.String("name", modelName),
+				zap.String("path", modelPath),
+				zap.Strings("variants", variantIDs))
+
+			// Pool size for concurrent pipeline access
+			// Cap at 4 to avoid excessive memory usage (each pipeline loads full model)
+			poolSize := min(runtime.NumCPU(), 4)
+
+			// Load each variant
+			for variantID, onnxFilename := range variants {
+				// Determine registry name
+				registryName := modelName
+				if variantID != "" {
+					registryName = modelName + "-" + variantID
+				}
+
+				// Pass model path, ONNX filename, and session manager to pooled NER model
+				model, backendUsed, err := ner.NewPooledHugotNERWithSessionManager(modelPath, onnxFilename, poolSize, sessionManager, nil, logger.Named(registryName))
+				if err != nil {
+					logger.Warn("Failed to load NER model variant",
+						zap.String("name", registryName),
+						zap.String("onnxFile", onnxFilename),
+						zap.Error(err))
+				} else {
+					registry.models[registryName] = model
+					logger.Info("Successfully loaded NER model",
+						zap.String("name", registryName),
+						zap.String("onnxFile", onnxFilename),
+						zap.String("backend", string(backendUsed)),
+						zap.Int("poolSize", poolSize))
+				}
+			}
+		}
+	}
+
+	logger.Info("NER registry initialized",
+		zap.Int("models_loaded", len(registry.models)),
+		zap.Int("recognizers", len(registry.recognizers)))
+
+	return registry, nil
+}
+
+// Get returns a NER model by name
+func (r *NERRegistry) Get(modelName string) (ner.Model, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	model, ok := r.models[modelName]
+	if !ok {
+		return nil, fmt.Errorf("NER model not found: %s", modelName)
+	}
+	return model, nil
+}
+
+// GetRecognizer returns a zero-shot capable Recognizer by name (e.g., GLiNER)
+func (r *NERRegistry) GetRecognizer(modelName string) (ner.Recognizer, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	model, ok := r.recognizers[modelName]
+	if !ok {
+		return nil, fmt.Errorf("Recognizer not found: %s", modelName)
+	}
+	return model, nil
+}
+
+// IsRecognizer returns true if the model is a zero-shot capable Recognizer
+func (r *NERRegistry) IsRecognizer(modelName string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	_, ok := r.recognizers[modelName]
+	return ok
+}
+
+// List returns all available NER model names
+func (r *NERRegistry) List() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	names := make([]string, 0, len(r.models))
+	for name := range r.models {
+		names = append(names, name)
+	}
+	return names
+}
+
+// ListRecognizers returns all available zero-shot Recognizer model names
+func (r *NERRegistry) ListRecognizers() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	names := make([]string, 0, len(r.recognizers))
+	for name := range r.recognizers {
+		names = append(names, name)
+	}
+	return names
+}
+
+// Close closes all loaded NER models
+func (r *NERRegistry) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for name, model := range r.models {
+		if err := model.Close(); err != nil {
+			r.logger.Warn("Error closing NER model",
+				zap.String("name", name),
+				zap.Error(err))
+		}
+	}
+	return nil
+}
+
+// Seq2SeqRegistry manages multiple Seq2Seq text generation models loaded from a directory
+type Seq2SeqRegistry struct {
+	models map[string]seq2seq.Model // model name -> Seq2Seq model instance
+	mu     sync.RWMutex
+	logger *zap.Logger
+}
+
+// NewSeq2SeqRegistry creates a registry and discovers Seq2Seq models in the given directory
+// Seq2Seq models have encoder.onnx, decoder-init.onnx, and decoder.onnx files
+// If sessionManager is provided, all models will use it for backend selection
+func NewSeq2SeqRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*Seq2SeqRegistry, error) {
+	registry := &Seq2SeqRegistry{
+		models: make(map[string]seq2seq.Model),
+		logger: logger,
+	}
+
+	if modelsDir == "" {
+		logger.Info("No Seq2Seq models directory configured")
+		return registry, nil
+	}
+
+	// Check if directory exists
+	if _, err := os.Stat(modelsDir); os.IsNotExist(err) {
+		logger.Warn("Seq2Seq models directory does not exist",
+			zap.String("dir", modelsDir))
+		return registry, nil
+	}
+
+	// Scan directory for model subdirectories
+	entries, err := os.ReadDir(modelsDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading Seq2Seq models directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		modelName := entry.Name()
+		modelPath := filepath.Join(modelsDir, modelName)
+
+		// Check if this is a Seq2Seq model (has encoder.onnx, decoder-init.onnx, decoder.onnx)
+		if !seq2seq.IsSeq2SeqModel(modelPath) {
+			logger.Debug("Skipping directory - not a Seq2Seq model",
+				zap.String("dir", modelName))
+			continue
+		}
+
+		logger.Info("Discovered Seq2Seq model directory",
+			zap.String("name", modelName),
+			zap.String("path", modelPath))
+
+		// Load the Seq2Seq model
+		model, backendUsed, err := seq2seq.NewHugotSeq2SeqWithSessionManager(modelPath, sessionManager, nil, logger.Named(modelName))
+		if err != nil {
+			logger.Warn("Failed to load Seq2Seq model",
+				zap.String("name", modelName),
+				zap.Error(err))
+		} else {
+			registry.models[modelName] = model
+			config := model.Config()
+			logger.Info("Successfully loaded Seq2Seq model",
+				zap.String("name", modelName),
+				zap.String("task", config.Task),
+				zap.Int("max_length", config.MaxLength),
+				zap.String("backend", string(backendUsed)))
+		}
+	}
+
+	logger.Info("Seq2Seq registry initialized",
+		zap.Int("models_loaded", len(registry.models)))
+
+	return registry, nil
+}
+
+// Get returns a Seq2Seq model by name
+func (r *Seq2SeqRegistry) Get(modelName string) (seq2seq.Model, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	model, ok := r.models[modelName]
+	if !ok {
+		return nil, fmt.Errorf("Seq2Seq model not found: %s", modelName)
+	}
+	return model, nil
+}
+
+// GetQuestionGenerator returns a Seq2Seq model as a QuestionGenerator by name
+func (r *Seq2SeqRegistry) GetQuestionGenerator(modelName string) (seq2seq.QuestionGenerator, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	model, ok := r.models[modelName]
+	if !ok {
+		return nil, fmt.Errorf("Seq2Seq model not found: %s", modelName)
+	}
+
+	qg, ok := model.(seq2seq.QuestionGenerator)
+	if !ok {
+		return nil, fmt.Errorf("model %s does not support question generation", modelName)
+	}
+	return qg, nil
+}
+
+// List returns all available Seq2Seq model names
+func (r *Seq2SeqRegistry) List() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	names := make([]string, 0, len(r.models))
+	for name := range r.models {
+		names = append(names, name)
+	}
+	return names
+}
+
+// Close closes all loaded Seq2Seq models
+func (r *Seq2SeqRegistry) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for name, model := range r.models {
+		if err := model.Close(); err != nil {
+			r.logger.Warn("Error closing Seq2Seq model",
 				zap.String("name", name),
 				zap.Error(err))
 		}
@@ -550,132 +952,128 @@ func generateGenaiConfig(modelPath string, logger *zap.Logger) error {
 		default:
 			// Try to infer from architectures
 			if archs, ok := hfConfig["architectures"].([]any); ok && len(archs) > 0 {
-				if arch, ok := archs[0].(string); ok {
-					switch {
-					case strings.Contains(arch, "Gemma"):
-						modelType = "gemma"
-					case strings.Contains(arch, "Llama"):
-						modelType = "llama"
-					case strings.Contains(arch, "Mistral"):
-						modelType = "mistral"
-					case strings.Contains(arch, "Phi"):
-						modelType = "phi"
-					case strings.Contains(arch, "Qwen"):
-						modelType = "qwen2"
-					}
+				archStr := fmt.Sprintf("%v", archs[0])
+				archLower := strings.ToLower(archStr)
+				if strings.Contains(archLower, "gemma") {
+					modelType = "gemma"
+				} else if strings.Contains(archLower, "llama") {
+					modelType = "llama"
+				} else if strings.Contains(archLower, "mistral") {
+					modelType = "mistral"
 				}
 			}
 		}
 	}
 
-	// Extract model parameters with defaults
-	getInt := func(key string, defaultVal int) int {
-		if v, ok := hfConfig[key].(float64); ok {
-			return int(v)
-		}
-		return defaultVal
+	logger.Info("Generating genai_config.json",
+		zap.String("modelPath", modelPath),
+		zap.String("modelType", modelType))
+
+	// Extract relevant config values with defaults
+	vocabSize := 32000
+	if vs, ok := hfConfig["vocab_size"].(float64); ok {
+		vocabSize = int(vs)
 	}
 
-	// Find the ONNX model file
-	onnxFilename := "model.onnx"
-	if _, err := os.Stat(filepath.Join(modelPath, "model.onnx")); os.IsNotExist(err) {
-		if _, err := os.Stat(filepath.Join(modelPath, "onnx", "model.onnx")); err == nil {
-			onnxFilename = "onnx/model.onnx"
-		}
+	hiddenSize := 2048
+	if hs, ok := hfConfig["hidden_size"].(float64); ok {
+		hiddenSize = int(hs)
 	}
 
-	// Build genai_config structure
+	numHiddenLayers := 16
+	if nhl, ok := hfConfig["num_hidden_layers"].(float64); ok {
+		numHiddenLayers = int(nhl)
+	}
+
+	numAttentionHeads := 8
+	if nah, ok := hfConfig["num_attention_heads"].(float64); ok {
+		numAttentionHeads = int(nah)
+	}
+
+	numKeyValueHeads := numAttentionHeads
+	if nkvh, ok := hfConfig["num_key_value_heads"].(float64); ok {
+		numKeyValueHeads = int(nkvh)
+	}
+
+	intermediateSize := hiddenSize * 4
+	if is, ok := hfConfig["intermediate_size"].(float64); ok {
+		intermediateSize = int(is)
+	}
+
+	headDim := hiddenSize / numAttentionHeads
+	if hd, ok := hfConfig["head_dim"].(float64); ok {
+		headDim = int(hd)
+	}
+
+	// Build genai_config.json
 	genaiConfig := map[string]any{
 		"model": map[string]any{
-			"bos_token_id":   getInt("bos_token_id", 1),
-			"eos_token_id":   getInt("eos_token_id", 2),
-			"pad_token_id":   getInt("pad_token_id", 0),
-			"vocab_size":     getInt("vocab_size", 32000),
-			"context_length": getInt("max_position_embeddings", 2048),
-			"type":           modelType,
+			"bos_token_id": 2,
+			"context_length": func() int {
+				if cl, ok := hfConfig["max_position_embeddings"].(float64); ok {
+					return int(cl)
+				}
+				return 8192
+			}(),
 			"decoder": map[string]any{
-				"session_options": map[string]any{
-					"provider_options": []any{},
-				},
-				"filename":            onnxFilename,
-				"head_size":           getInt("head_dim", 64),
-				"hidden_size":         getInt("hidden_size", 768),
-				"num_attention_heads": getInt("num_attention_heads", 12),
-				"num_key_value_heads": getInt("num_key_value_heads", getInt("num_attention_heads", 12)),
-				"num_hidden_layers":   getInt("num_hidden_layers", 12),
+				"session_options": map[string]any{},
+				"filename":        "model.onnx",
+				"head_dim":        headDim,
+				"hidden_size":     hiddenSize,
 				"inputs": map[string]string{
-					"attention_mask":  "attention_mask",
-					"input_ids":       "input_ids",
-					"past_key_names":  "past_key_values.%d.key",
-					"past_value_names": "past_key_values.%d.value",
+					"input_ids":      "input_ids",
+					"attention_mask": "attention_mask",
+					"position_ids":   "position_ids",
 				},
+				"num_attention_heads": numAttentionHeads,
+				"num_hidden_layers":   numHiddenLayers,
+				"num_key_value_heads": numKeyValueHeads,
 				"outputs": map[string]string{
-					"logits":              "logits",
-					"present_key_names":   "present.%d.key",
-					"present_value_names": "present.%d.value",
+					"logits": "logits",
 				},
 			},
+			"eos_token_id":      1,
+			"pad_token_id":      0,
+			"type":              modelType,
+			"vocab_size":        vocabSize,
+			"intermediate_size": intermediateSize,
 		},
 		"search": map[string]any{
-			"diversity_penalty":        0.0,
-			"do_sample":                true,
-			"early_stopping":           true,
-			"length_penalty":           1.0,
-			"max_length":               2048,
-			"min_length":               0,
-			"no_repeat_ngram_size":     0,
-			"num_beams":                1,
-			"num_return_sequences":     1,
+			"diversity_penalty": 0.0,
+			"do_sample":         false,
+			"early_stopping":    true,
+			"length_penalty":    1.0,
+			"max_length":        2048,
+			"min_length":        0,
+			"no_repeat_ngram_size": 0,
+			"num_beams":         1,
+			"num_return_sequences": 1,
 			"past_present_share_buffer": false,
-			"repetition_penalty":       1.0,
-			"top_k":                    50,
-			"top_p":                    0.95,
+			"repetition_penalty": 1.0,
+			"temperature":        1.0,
+			"top_k":              1,
+			"top_p":              1.0,
 		},
 	}
 
-	// Try to read generation_config.json for sampling parameters
-	genConfigPath := filepath.Join(modelPath, "generation_config.json")
-	if genConfigData, err := os.ReadFile(genConfigPath); err == nil {
-		var genConfig map[string]any
-		if err := json.Unmarshal(genConfigData, &genConfig); err == nil {
-			search := genaiConfig["search"].(map[string]any)
-			if v, ok := genConfig["do_sample"].(bool); ok {
-				search["do_sample"] = v
-			}
-			if v, ok := genConfig["top_k"].(float64); ok {
-				search["top_k"] = int(v)
-			}
-			if v, ok := genConfig["top_p"].(float64); ok {
-				search["top_p"] = v
-			}
-			if v, ok := genConfig["temperature"].(float64); ok {
-				search["temperature"] = v
-			}
-		}
-	}
-
-	// Write genai_config.json
-	output, err := json.MarshalIndent(genaiConfig, "", "  ")
+	// Write the file
+	genaiData, err := json.MarshalIndent(genaiConfig, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling genai_config: %w", err)
 	}
 
-	if err := os.WriteFile(genaiConfigPath, output, 0644); err != nil {
+	if err := os.WriteFile(genaiConfigPath, genaiData, 0644); err != nil {
 		return fmt.Errorf("writing genai_config.json: %w", err)
 	}
 
-	logger.Info("Generated genai_config.json from HuggingFace config",
-		zap.String("path", genaiConfigPath),
-		zap.String("modelType", modelType))
+	logger.Info("Generated genai_config.json successfully",
+		zap.String("path", genaiConfigPath))
 
 	return nil
 }
 
-
-// isValidGeneratorModel checks if a directory contains a valid generator model.
-// Returns true if the directory has either:
-// - genai_config.json (ONNX Runtime GenAI format)
-// - config.json with model.onnx (standard HuggingFace ONNX format)
+// isValidGeneratorModel checks if a model directory contains a valid generator model.
+// Supports both ONNX Runtime GenAI format (genai_config.json) and HuggingFace ONNX format.
 func isValidGeneratorModel(modelPath string) bool {
 	// Check for ONNX Runtime GenAI format
 	if _, err := os.Stat(filepath.Join(modelPath, "genai_config.json")); err == nil {
@@ -701,12 +1099,9 @@ func isValidGeneratorModel(modelPath string) bool {
 }
 
 // NewGeneratorRegistry creates a registry and discovers models in the given directory
-// Directory structure: modelsDir/model_name/
-// Supports both:
-// - ONNX Runtime GenAI format (genai_config.json)
-// - Standard HuggingFace ONNX format (config.json + model.onnx)
-// If sharedSession is provided, all models will share the same Hugot session (required for ONNX Runtime)
-func NewGeneratorRegistry(modelsDir string, sharedSession *khugot.Session, logger *zap.Logger) (*GeneratorRegistry, error) {
+// Directory structure: modelsDir/model_name/model.onnx (or model_name/onnx/model.onnx)
+// If sessionManager is provided, it will be used to obtain sessions for model loading
+func NewGeneratorRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*GeneratorRegistry, error) {
 	registry := &GeneratorRegistry{
 		models: make(map[string]generation.Generator),
 		logger: logger,
@@ -727,7 +1122,7 @@ func NewGeneratorRegistry(modelsDir string, sharedSession *khugot.Session, logge
 	// Scan directory for model subdirectories
 	entries, err := os.ReadDir(modelsDir)
 	if err != nil {
-		return nil, fmt.Errorf("reading models directory: %w", err)
+		return nil, fmt.Errorf("reading generator models directory: %w", err)
 	}
 
 	for _, entry := range entries {
@@ -738,9 +1133,21 @@ func NewGeneratorRegistry(modelsDir string, sharedSession *khugot.Session, logge
 		modelName := entry.Name()
 		modelPath := filepath.Join(modelsDir, modelName)
 
-		// Check if this is a valid generator model
-		if !isValidGeneratorModel(modelPath) {
-			logger.Debug("Skipping directory without valid generator model files",
+		// Check for model.onnx in root or onnx/ subdirectory
+		hasONNX := false
+		for _, subpath := range []string{"", "onnx"} {
+			checkPath := filepath.Join(modelPath, subpath, "model.onnx")
+			if _, err := os.Stat(checkPath); err == nil {
+				hasONNX = true
+				if subpath != "" {
+					modelPath = filepath.Join(modelPath, subpath)
+				}
+				break
+			}
+		}
+
+		if !hasONNX {
+			logger.Debug("Skipping directory - no model.onnx found",
 				zap.String("dir", modelName))
 			continue
 		}
@@ -749,20 +1156,24 @@ func NewGeneratorRegistry(modelsDir string, sharedSession *khugot.Session, logge
 			zap.String("name", modelName),
 			zap.String("path", modelPath))
 
-		// Auto-generate genai_config.json from HuggingFace config if needed
+		// Try to generate genai_config.json if needed
 		if err := generateGenaiConfig(modelPath, logger); err != nil {
 			logger.Warn("Failed to generate genai_config.json",
 				zap.String("name", modelName),
 				zap.Error(err))
-			continue
 		}
 
-		// Pool size for concurrent pipeline access
-		// Cap at 4 to avoid excessive memory usage (each pipeline loads full model)
-		poolSize := min(runtime.NumCPU(), 4)
+		// Load the generator model
+		var model generation.Generator
+		var backendUsed hugot.BackendType
+		var err error
 
-		// Create pooled generator
-		model, err := generation.NewPooledHugotGeneratorWithSession(modelPath, poolSize, sharedSession, logger.Named(modelName))
+		if sessionManager != nil {
+			model, backendUsed, err = generation.NewHugotGeneratorWithSessionManager(modelPath, sessionManager, nil, logger.Named(modelName))
+		} else {
+			model, err = generation.NewHugotGeneratorWithSession(modelPath, nil, logger.Named(modelName))
+		}
+
 		if err != nil {
 			logger.Warn("Failed to load generator model",
 				zap.String("name", modelName),
@@ -771,7 +1182,7 @@ func NewGeneratorRegistry(modelsDir string, sharedSession *khugot.Session, logge
 			registry.models[modelName] = model
 			logger.Info("Successfully loaded generator model",
 				zap.String("name", modelName),
-				zap.Int("poolSize", poolSize))
+				zap.String("backend", string(backendUsed)))
 		}
 	}
 
@@ -781,7 +1192,7 @@ func NewGeneratorRegistry(modelsDir string, sharedSession *khugot.Session, logge
 	return registry, nil
 }
 
-// Get returns a generator by model name
+// Get returns a generator by name
 func (r *GeneratorRegistry) Get(modelName string) (generation.Generator, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -793,7 +1204,7 @@ func (r *GeneratorRegistry) Get(modelName string) (generation.Generator, error) 
 	return model, nil
 }
 
-// List returns all available model names
+// List returns all available generator model names
 func (r *GeneratorRegistry) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -805,7 +1216,7 @@ func (r *GeneratorRegistry) List() []string {
 	return names
 }
 
-// Close closes all loaded models
+// Close closes all loaded generator models
 func (r *GeneratorRegistry) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

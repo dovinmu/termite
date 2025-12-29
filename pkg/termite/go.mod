@@ -1,21 +1,23 @@
 module github.com/antflydb/termite/pkg/termite
 
-go 1.25
+go 1.25.0
 
-replace github.com/gomlx/gomlx => github.com/timkaye11/gomlx v0.0.0-20251217194311-d3b7c50c8459
+replace github.com/gomlx/gomlx => github.com/timkaye11/gomlx v0.0.0-20251221044952-ee84bc4bbaf7
 
 replace github.com/gomlx/onnx-gomlx => github.com/timkaye11/onnx-gomlx v0.0.0-20251217194823-a871bb8cc687
 
-replace github.com/knights-analytics/hugot => github.com/timkaye11/hugot v0.0.0-20251219045106-38a69c966d89
+replace github.com/knights-analytics/hugot => github.com/timkaye11/hugot v0.0.0-20251220003714-ef99c764668a
+
+replace github.com/knights-analytics/ortgenai => github.com/ajroetker/ortgenai v0.0.0-20251229052243-d2d8091589c4
 
 require (
-	github.com/antflydb/antfly-go/libaf v0.0.0-20251218041248-7d57e4c8b270
+	github.com/antflydb/antfly-go/libaf v0.0.0-20251223084332-a4c929e52574
 	github.com/bytedance/sonic v1.14.2
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/gomlx/go-huggingface v0.3.1
 	github.com/jellydator/ttlcache/v3 v3.4.0
-	github.com/knights-analytics/hugot v0.5.10
+	github.com/knights-analytics/hugot v0.6.0
 	github.com/oapi-codegen/runtime v1.1.2
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/pkoukk/tiktoken-go-loader v0.0.2
@@ -25,7 +27,6 @@ require (
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
 	github.com/sugarme/tokenizer v0.3.0
-	github.com/yalue/onnxruntime_go v1.25.0
 	go.uber.org/zap v1.27.1
 	golang.org/x/image v0.34.0
 	golang.org/x/sync v0.19.0
@@ -72,6 +73,8 @@ require (
 	github.com/oapi-codegen/oapi-codegen/v2 v2.5.1 // indirect
 	github.com/oasdiff/yaml v0.0.0-20250309154309-f31be36b4037 // indirect
 	github.com/oasdiff/yaml3 v0.0.0-20250309153720-d2182401db90 // indirect
+	github.com/onsi/ginkgo v1.16.5 // indirect
+	github.com/onsi/gomega v1.38.2 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
@@ -93,16 +96,17 @@ require (
 	github.com/sugarme/regexpset v0.0.0-20200920021344-4d4ec8eaf93c // indirect
 	github.com/tinylib/msgp v1.6.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
-	github.com/viant/afs v1.29.0 // indirect
+	github.com/viant/afs v1.30.0 // indirect
 	github.com/vmware-labs/yaml-jsonpath v0.3.2 // indirect
 	github.com/woodsbury/decimal128 v1.4.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	github.com/yalue/onnxruntime_go v1.25.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/arch v0.23.0 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
-	golang.org/x/exp v0.0.0-20251209150349-8475f28825e9 // indirect
+	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
 	golang.org/x/mod v0.31.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect

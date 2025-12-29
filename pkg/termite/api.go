@@ -30,6 +30,7 @@ import (
 	"github.com/antflydb/antfly-go/libaf/s3"
 	"github.com/antflydb/antfly-go/libaf/scraping"
 	"github.com/antflydb/termite/pkg/termite/lib/generation"
+	"github.com/antflydb/termite/pkg/termite/lib/ner"
 	"github.com/bytedance/sonic/decoder"
 	"github.com/bytedance/sonic/encoder"
 	"go.uber.org/zap"
@@ -75,20 +76,26 @@ func (t *TermiteAPI) GenerateText(w http.ResponseWriter, r *http.Request) {
 	t.node.handleApiGenerate(w, r)
 }
 
+// RecognizeEntities implements ServerInterface
+func (t *TermiteAPI) RecognizeEntities(w http.ResponseWriter, r *http.Request) {
+	t.node.handleApiRecognize(w, r)
+}
+
+// GenerateQuestions implements ServerInterface
+func (t *TermiteAPI) GenerateQuestions(w http.ResponseWriter, r *http.Request) {
+	t.node.handleApiQuestionate(w, r)
+}
+
 // ListModels implements ServerInterface
 func (t *TermiteAPI) ListModels(w http.ResponseWriter, r *http.Request) {
-	// Use extended response with generators field
-	// (ModelsResponse in api.gen.go will include this after code generation)
-	resp := struct {
-		Chunkers   []string `json:"chunkers"`
-		Rerankers  []string `json:"rerankers"`
-		Embedders  []string `json:"embedders"`
-		Generators []string `json:"generators"`
-	}{
-		Chunkers:   []string{},
-		Rerankers:  []string{},
-		Embedders:  []string{},
-		Generators: []string{},
+	resp := ModelsResponse{
+		Chunkers:      []string{},
+		Rerankers:     []string{},
+		Embedders:     []string{},
+		Generators:    []string{},
+		Recognizers:   []string{},
+		Extractors:    []string{},
+		Questionators: []string{},
 	}
 
 	if t.node.cachedChunker != nil {
@@ -105,6 +112,15 @@ func (t *TermiteAPI) ListModels(w http.ResponseWriter, r *http.Request) {
 
 	if t.node.generatorRegistry != nil {
 		resp.Generators = t.node.generatorRegistry.List()
+	}
+
+	if t.node.nerRegistry != nil {
+		resp.Recognizers = t.node.nerRegistry.List()
+		resp.Extractors = t.node.nerRegistry.ListRecognizers()
+	}
+
+	if t.node.seq2seqRegistry != nil {
+		resp.Questionators = t.node.seq2seqRegistry.List()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -535,6 +551,144 @@ func (ln *TermiteNode) handleApiRerank(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleApiRecognize handles NER (Named Entity Recognition) requests
+func (ln *TermiteNode) handleApiRecognize(w http.ResponseWriter, r *http.Request) {
+	defer func() { _ = r.Body.Close() }()
+
+	// Check if NER is available
+	if ln.nerRegistry == nil || len(ln.nerRegistry.List()) == 0 {
+		http.Error(w, "NER not available: no models configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Apply backpressure via request queue
+	release, err := ln.requestQueue.Acquire(r.Context())
+	if err != nil {
+		switch err {
+		case ErrQueueFull:
+			RecordQueueRejection()
+			WriteQueueFullResponse(w, 5*time.Second)
+		case ErrRequestTimeout:
+			RecordQueueTimeout()
+			WriteTimeoutResponse(w)
+		default:
+			http.Error(w, "request cancelled", http.StatusRequestTimeout)
+		}
+		return
+	}
+	defer release()
+
+	// Update queue metrics
+	UpdateQueueMetrics(ln.requestQueue.Stats())
+
+	// Decode request
+	var req struct {
+		Model  string   `json:"model"`  // Model name to use (required)
+		Texts  []string `json:"texts"`  // Texts to extract entities from
+		Labels []string `json:"labels"` // Custom labels for GLiNER models (optional)
+	}
+	if err := decoder.NewStreamDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Validate request
+	if req.Model == "" {
+		http.Error(w, "model is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Texts) == 0 {
+		http.Error(w, "texts are required", http.StatusBadRequest)
+		return
+	}
+
+	var entities [][]ner.Entity
+
+	// Check if this is a zero-shot Recognizer with custom labels
+	if len(req.Labels) > 0 && ln.nerRegistry.IsRecognizer(req.Model) {
+		// Use Recognizer with custom labels (zero-shot NER)
+		recognizer, err := ln.nerRegistry.GetRecognizer(req.Model)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Recognizer not found: %s", req.Model), http.StatusNotFound)
+			return
+		}
+
+		// Recognize with custom labels
+		entities, err = recognizer.RecognizeWithLabels(r.Context(), req.Texts, req.Labels)
+		if err != nil {
+			ln.logger.Error("Recognition failed",
+				zap.String("model", req.Model),
+				zap.Strings("labels", req.Labels),
+				zap.Int("num_texts", len(req.Texts)),
+				zap.Error(err))
+			http.Error(w, fmt.Sprintf("Recognition failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Get standard NER model from registry
+		model, err := ln.nerRegistry.Get(req.Model)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("model not found: %s", req.Model), http.StatusNotFound)
+			return
+		}
+
+		// Wrap model with caching for deduplicated requests
+		cachedModel := ln.nerCache.WrapModel(model, req.Model)
+
+		// Recognize entities (with caching and singleflight deduplication)
+		entities, err = cachedModel.Recognize(r.Context(), req.Texts)
+		if err != nil {
+			ln.logger.Error("NER failed",
+				zap.String("model", req.Model),
+				zap.Int("num_texts", len(req.Texts)),
+				zap.Error(err))
+			http.Error(w, fmt.Sprintf("NER failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Record metrics
+	RecordNERRequest(req.Model)
+	totalEntities := 0
+	for _, textEntities := range entities {
+		totalEntities += len(textEntities)
+	}
+	RecordNERCreation(req.Model, totalEntities)
+
+	ln.logger.Info("NER request completed",
+		zap.String("model", req.Model),
+		zap.Int("num_texts", len(req.Texts)),
+		zap.Int("total_entities", totalEntities))
+
+	// Convert internal Entity type to API response type
+	apiEntities := make([][]RecognizeEntity, len(entities))
+	for i, textEntities := range entities {
+		apiEntities[i] = make([]RecognizeEntity, len(textEntities))
+		for j, e := range textEntities {
+			apiEntities[i][j] = RecognizeEntity{
+				Text:  e.Text,
+				Label: e.Label,
+				Start: e.Start,
+				End:   e.End,
+				Score: e.Score,
+			}
+		}
+	}
+
+	// Send response
+	nerResp := RecognizeResponse{
+		Model:    req.Model,
+		Entities: apiEntities,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := encoder.NewStreamEncoder(w).Encode(nerResp); err != nil {
+		ln.logger.Error("encoding response", zap.Error(err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
 // handleApiGenerate handles text generation requests using LLM models
 func (ln *TermiteNode) handleApiGenerate(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = r.Body.Close() }()
@@ -644,6 +798,93 @@ func (ln *TermiteNode) handleApiGenerate(w http.ResponseWriter, r *http.Request)
 		Text:         result.Text,
 		TokensUsed:   result.TokensUsed,
 		FinishReason: GenerateResponseFinishReason(result.FinishReason),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := encoder.NewStreamEncoder(w).Encode(resp); err != nil {
+		ln.logger.Error("encoding response", zap.Error(err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleApiQuestionate handles Seq2Seq question generation requests
+func (ln *TermiteNode) handleApiQuestionate(w http.ResponseWriter, r *http.Request) {
+	defer func() { _ = r.Body.Close() }()
+
+	// Check if question generation is available
+	if ln.seq2seqRegistry == nil || len(ln.seq2seqRegistry.List()) == 0 {
+		http.Error(w, "question generation not available: no models configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Apply backpressure via request queue
+	release, err := ln.requestQueue.Acquire(r.Context())
+	if err != nil {
+		switch err {
+		case ErrQueueFull:
+			RecordQueueRejection()
+			WriteQueueFullResponse(w, 5*time.Second)
+		case ErrRequestTimeout:
+			RecordQueueTimeout()
+			WriteTimeoutResponse(w)
+		default:
+			http.Error(w, "request cancelled", http.StatusRequestTimeout)
+		}
+		return
+	}
+	defer release()
+
+	// Update queue metrics
+	UpdateQueueMetrics(ln.requestQueue.Stats())
+
+	// Decode request
+	var req struct {
+		Model  string   `json:"model"`  // Model name to use (required)
+		Inputs []string `json:"inputs"` // Input texts to generate from
+	}
+	if err := decoder.NewStreamDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Validate request
+	if req.Model == "" {
+		http.Error(w, "model is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Inputs) == 0 {
+		http.Error(w, "inputs are required", http.StatusBadRequest)
+		return
+	}
+
+	// Get model from registry
+	model, err := ln.seq2seqRegistry.Get(req.Model)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("model not found: %s", req.Model), http.StatusNotFound)
+		return
+	}
+
+	// Generate text
+	output, err := model.Generate(r.Context(), req.Inputs)
+	if err != nil {
+		ln.logger.Error("question generation failed",
+			zap.String("model", req.Model),
+			zap.Int("num_inputs", len(req.Inputs)),
+			zap.Error(err))
+		http.Error(w, fmt.Sprintf("question generation failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	ln.logger.Info("question generation request completed",
+		zap.String("model", req.Model),
+		zap.Int("num_inputs", len(req.Inputs)),
+		zap.Int("num_outputs", len(output.Texts)))
+
+	// Send response
+	resp := QuestionGenerateResponse{
+		Model: req.Model,
+		Texts: output.Texts,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

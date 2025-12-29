@@ -43,12 +43,12 @@ func skipIfNoModels(t testing.TB, modelsDir string) {
 
 // newNonQuantizedHugotModel creates a Hugot model that explicitly uses the non-quantized version
 func newNonQuantizedHugotModel(modelPath string, logger *zap.Logger) (reranking.Model, error) {
-	return termreranking.NewHugotReranker(modelPath, "model.onnx", logger)
+	return termreranking.NewPooledHugotReranker(modelPath, "model.onnx", 1, logger)
 }
 
 // newQuantizedHugotModel creates a Hugot model that explicitly uses the quantized version
 func newQuantizedHugotModel(modelPath string, logger *zap.Logger) (reranking.Model, error) {
-	return termreranking.NewHugotReranker(modelPath, "model_i8.onnx", logger)
+	return termreranking.NewPooledHugotReranker(modelPath, "model_i8.onnx", 1, logger)
 }
 
 func TestRerankerRegistryLoading(t *testing.T) {
@@ -61,13 +61,12 @@ func TestRerankerRegistryLoading(t *testing.T) {
 	logger := zap.NewExample()
 	defer func() { _ = logger.Sync() }()
 
-	// Create hugot session
-	session, err := hugot.NewSession()
-	require.NoError(t, err)
-	defer func() { _ = session.Destroy() }()
+	// Create session manager
+	sessionManager := hugot.NewSessionManager()
+	defer func() { _ = sessionManager.Close() }()
 
 	// Create registry
-	registry, err := NewRerankerRegistry(modelsDir, session, logger)
+	registry, err := NewRerankerRegistry(modelsDir, sessionManager, logger)
 	require.NoError(t, err)
 	require.NotNil(t, registry)
 	defer func() { _ = registry.Close() }()
@@ -181,13 +180,12 @@ func TestCompareAllRerankerModels(t *testing.T) {
 	logger := zap.NewExample()
 	defer func() { _ = logger.Sync() }()
 
-	// Create hugot session
-	session, err := hugot.NewSession()
-	require.NoError(t, err)
-	defer func() { _ = session.Destroy() }()
+	// Create session manager
+	sessionManager := hugot.NewSessionManager()
+	defer func() { _ = sessionManager.Close() }()
 
 	// Create registry
-	registry, err := NewRerankerRegistry(modelsDir, session, logger)
+	registry, err := NewRerankerRegistry(modelsDir, sessionManager, logger)
 	require.NoError(t, err)
 	require.NotNil(t, registry)
 	defer func() { _ = registry.Close() }()
@@ -372,13 +370,12 @@ func BenchmarkAllRerankerModels(b *testing.B) {
 		"Classical music has been popular for centuries across many cultures.",
 	}
 
-	// Create hugot session
-	session, err := hugot.NewSession()
-	require.NoError(b, err)
-	defer func() { _ = session.Destroy() }()
+	// Create session manager
+	sessionManager := hugot.NewSessionManager()
+	defer func() { _ = sessionManager.Close() }()
 
 	// Create registry once for all benchmarks
-	registry, err := NewRerankerRegistry(modelsDir, session, logger)
+	registry, err := NewRerankerRegistry(modelsDir, sessionManager, logger)
 	require.NoError(b, err)
 	require.NotNil(b, registry)
 	defer func() { _ = registry.Close() }()
@@ -429,13 +426,12 @@ func TestEmbedderRegistryLoading(t *testing.T) {
 	logger := zap.NewExample()
 	defer func() { _ = logger.Sync() }()
 
-	// Create hugot session
-	session, err := hugot.NewSession()
-	require.NoError(t, err)
-	defer func() { _ = session.Destroy() }()
+	// Create session manager
+	sessionManager := hugot.NewSessionManager()
+	defer func() { _ = sessionManager.Close() }()
 
 	// Create registry
-	registry, err := NewEmbedderRegistry(modelsDir, session, logger)
+	registry, err := NewEmbedderRegistry(modelsDir, sessionManager, logger)
 	require.NoError(t, err)
 	require.NotNil(t, registry)
 	defer func() { _ = registry.Close() }()
@@ -464,13 +460,12 @@ func TestEmbedderModelEmbedding(t *testing.T) {
 	logger := zap.NewExample()
 	defer func() { _ = logger.Sync() }()
 
-	// Create hugot session
-	session, err := hugot.NewSession()
-	require.NoError(t, err)
-	defer func() { _ = session.Destroy() }()
+	// Create session manager
+	sessionManager := hugot.NewSessionManager()
+	defer func() { _ = sessionManager.Close() }()
 
 	// Create registry
-	registry, err := NewEmbedderRegistry(modelsDir, session, logger)
+	registry, err := NewEmbedderRegistry(modelsDir, sessionManager, logger)
 	require.NoError(t, err)
 	require.NotNil(t, registry)
 	defer func() { _ = registry.Close() }()
@@ -516,13 +511,12 @@ func TestEmbedderQuantizedVsNonQuantized(t *testing.T) {
 	logger := zap.NewExample()
 	defer func() { _ = logger.Sync() }()
 
-	// Create hugot session
-	session, err := hugot.NewSession()
-	require.NoError(t, err)
-	defer func() { _ = session.Destroy() }()
+	// Create session manager
+	sessionManager := hugot.NewSessionManager()
+	defer func() { _ = sessionManager.Close() }()
 
 	// Create registry
-	registry, err := NewEmbedderRegistry(modelsDir, session, logger)
+	registry, err := NewEmbedderRegistry(modelsDir, sessionManager, logger)
 	require.NoError(t, err)
 	require.NotNil(t, registry)
 	defer func() { _ = registry.Close() }()
@@ -602,12 +596,11 @@ func BenchmarkEmbedderQuantizedVsNonQuantized(b *testing.B) {
 
 	ctx := context.Background()
 
-	// Create hugot session
-	session, err := hugot.NewSession()
-	require.NoError(b, err)
-	defer func() { _ = session.Destroy() }()
+	// Create session manager
+	sessionManager := hugot.NewSessionManager()
+	defer func() { _ = sessionManager.Close() }()
 
-	registry, err := NewEmbedderRegistry(modelsDir, session, logger)
+	registry, err := NewEmbedderRegistry(modelsDir, sessionManager, logger)
 	require.NoError(b, err)
 	require.NotNil(b, registry)
 	defer func() { _ = registry.Close() }()

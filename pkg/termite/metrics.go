@@ -92,6 +92,24 @@ var (
 		},
 		[]string{"model"},
 	)
+	nerRequestOps = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "antfly",
+			Subsystem: "termite",
+			Name:      "ner_request_ops_total",
+			Help:      "The total number of NER requests.",
+		},
+		[]string{"model"},
+	)
+	nerCreationOps = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "antfly",
+			Subsystem: "termite",
+			Name:      "ner_creation_ops_total",
+			Help:      "The total number of entities extracted.",
+		},
+		[]string{"model"},
+	)
 
 	modelLoadDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -192,6 +210,8 @@ func init() {
 	prometheus.MustRegister(chunkCreationOps)
 	prometheus.MustRegister(generatorRequestOps)
 	prometheus.MustRegister(tokenGenerationOps)
+	prometheus.MustRegister(nerRequestOps)
+	prometheus.MustRegister(nerCreationOps)
 	prometheus.MustRegister(modelLoadDuration)
 	prometheus.MustRegister(requestDuration)
 	prometheus.MustRegister(cacheHits)
@@ -272,4 +292,14 @@ func RecordGeneratorRequest(model string) {
 // RecordTokenGeneration records the number of tokens generated
 func RecordTokenGeneration(model string, count int) {
 	tokenGenerationOps.WithLabelValues(model).Add(float64(count))
+}
+
+// RecordNERRequest increments the NER request counter
+func RecordNERRequest(model string) {
+	nerRequestOps.WithLabelValues(model).Inc()
+}
+
+// RecordNERCreation records the number of entities extracted
+func RecordNERCreation(model string, count int) {
+	nerCreationOps.WithLabelValues(model).Add(float64(count))
 }

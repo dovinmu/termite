@@ -11,7 +11,8 @@ info:
     - **Embedding Generation**: Text and multimodal (CLIP) embedding models
     - **Text Chunking**: Semantic chunking with ONNX models or fixed-size fallback
     - **Reranking**: Relevance re-scoring for search results
-    - **Future**: NER, classification, and generative model support planned
+    - **Named Entity Recognition**: Extract persons, organizations, locations from text
+    - **Question Generation**: Generate questions from text using Seq2Seq models
 
     Download the latest release at https://antfly.io/docs/downloads
 
@@ -63,17 +64,6 @@ security: []  # No authentication required - Termite runs locally
 
 components:
   schemas:
-    GPUMode:
-      type: string
-      enum: [auto, tpu, cuda, coreml, "off"]
-      description: |
-        GPU/accelerator mode. Configurable via TERMITE_GPU env var (viper auto-binding).
-        - "auto": Auto-detect (default). TPU > CUDA/CoreML > CPU based on availability.
-        - "tpu": Force TPU. Fails if TPU not available.
-        - "cuda": Force CUDA. Fails if CUDA not available.
-        - "coreml": Force CoreML (macOS only).
-        - "off": CPU only, disable all GPU acceleration.
-
     Error:
       type: object
       required:
@@ -326,6 +316,117 @@ components:
             format: float
           description: Relevance scores (one per prompt, same order as input)
 
+    # Recognizer Types
+    RecognizeEntity:
+      type: object
+      required:
+        - text
+        - label
+        - start
+        - end
+        - score
+      properties:
+        text:
+          type: string
+          description: The entity text
+          example: "John Smith"
+        label:
+          type: string
+          description: Entity type (PER, ORG, LOC, MISC)
+          example: "PER"
+        start:
+          type: integer
+          description: Character offset where entity begins
+          example: 0
+        end:
+          type: integer
+          description: Character offset where entity ends (exclusive)
+          example: 10
+        score:
+          type: number
+          format: float
+          description: Confidence score (0.0 to 1.0)
+          example: 0.99
+
+    RecognizeRequest:
+      type: object
+      required:
+        - model
+        - texts
+      properties:
+        model:
+          type: string
+          description: Name of recognizer model from models_dir/recognizers/
+          example: "bert-base-ner"
+        texts:
+          type: array
+          items:
+            type: string
+          description: Texts to extract entities from
+          example: ["John Smith works at Google.", "Apple Inc. is in Cupertino."]
+        labels:
+          type: array
+          items:
+            type: string
+          description: |
+            Custom entity labels to extract (GLiNER models only).
+            When using a GLiNER model, you can specify any entity types to extract,
+            enabling zero-shot NER without model retraining.
+            If not provided, the model's default labels are used.
+          example: ["person", "company", "product", "date"]
+
+    RecognizeResponse:
+      type: object
+      required:
+        - model
+        - entities
+      properties:
+        model:
+          type: string
+          description: Name of model used for NER
+        entities:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: "#/components/schemas/RecognizeEntity"
+          description: Array of entity arrays (one per input text)
+
+    # Questionator Types (Seq2Seq)
+    QuestionGenerateRequest:
+      type: object
+      required:
+        - model
+        - inputs
+      properties:
+        model:
+          type: string
+          description: Name of Seq2Seq questionator model from models_dir/questionators/
+          example: "flan-t5-small"
+        inputs:
+          type: array
+          items:
+            type: string
+          description: Input texts to generate from
+          example: ["Translate to German: Hello, how are you?"]
+
+    QuestionGenerateResponse:
+      type: object
+      required:
+        - model
+        - texts
+      properties:
+        model:
+          type: string
+          description: Name of model used for generation
+        texts:
+          type: array
+          items:
+            type: array
+            items:
+              type: string
+          description: Generated texts (array of arrays, one per input, multiple per beam)
+
     # Models Types
     ModelsResponse:
       type: object
@@ -334,6 +435,8 @@ components:
         - rerankers
         - embedders
         - generators
+        - recognizers
+        - questionators
       properties:
         chunkers:
           type: array
@@ -359,6 +462,24 @@ components:
             type: string
           description: Available generator/LLM models from models_dir/generators/
           example: ["gemma-3-1b-it", "tiny-random-gemma-3"]
+        recognizers:
+          type: array
+          items:
+            type: string
+          description: Available recognizer models from models_dir/recognizers/
+          example: ["bert-base-ner", "distilbert-ner", "gliner-small"]
+        extractors:
+          type: array
+          items:
+            type: string
+          description: Available GLiNER extractor models (zero-shot recognition with custom labels)
+          example: ["gliner-small", "gliner-multitask"]
+        questionators:
+          type: array
+          items:
+            type: string
+          description: Available Seq2Seq questionator models from models_dir/questionators/
+          example: ["flan-t5-small", "lmqg-question-generation"]
 
     # Generation Types (LLM/Chat)
     ChatMessage:
@@ -448,6 +569,8 @@ components:
             - `{models_dir}/embedders/` - Embedding models (ONNX)
             - `{models_dir}/chunkers/` - Chunking models (ONNX)
             - `{models_dir}/rerankers/` - Reranking models (ONNX)
+            - `{models_dir}/recognizers/` - Recognition models (ONNX)
+            - `{models_dir}/questionators/` - Question generation models (ONNX)
 
             Defaults to ~/.termite/models (set via viper). If not set, only built-in fixed chunking is available.
           example: "~/.termite/models"
@@ -474,10 +597,35 @@ components:
             Set to 0 for unlimited (default). Only effective when keep_alive is non-zero.
           default: 0
           example: 3
-        gpu:
-          allOf:
-            - $ref: "#/components/schemas/GPUMode"
-          default: "auto"
+        backend_priority:
+          type: array
+          items:
+            type: string
+          description: |
+            Backend priority order for model loading with optional device specifiers.
+            Format: `backend` or `backend:device` where device defaults to `auto`.
+
+            Termite tries entries in order and uses the first available backend+device
+            combination that supports the model.
+
+            **Backends** (depend on build tags):
+            - `go` - Pure Go inference (always available, CPU only, slowest)
+            - `onnx` - ONNX Runtime (requires -tags="onnx,ORT", fastest)
+            - `xla` - GoMLX XLA (requires -tags="xla,XLA", TPU/CUDA/CPU)
+
+            **Devices**:
+            - `auto` - Auto-detect best available (default)
+            - `cuda` - NVIDIA CUDA GPU
+            - `coreml` - Apple CoreML (macOS only, used by ONNX)
+            - `tpu` - Google TPU (used by XLA)
+            - `cpu` - Force CPU only
+
+            **Examples**:
+            - `["onnx", "xla", "go"]` - Try backends with auto device detection
+            - `["onnx:cuda", "xla:tpu", "onnx:cpu", "go"]` - Prefer GPU, fall back to CPU
+            - `["onnx:coreml", "go"]` - macOS with CoreML acceleration
+          default: [onnx, xla, go]
+          example: ["onnx:cuda", "xla:tpu", "onnx:cpu", "xla:cpu", "go"]
         max_concurrent_requests:
           type: integer
           description: |
@@ -874,11 +1022,144 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /recognize:
+    post:
+      summary: Recognize named entities
+      description: |
+        Recognizes named entities (persons, organizations, locations, etc.) from text using ONNX recognition models.
+
+        ## Entity Types
+
+        Standard CoNLL entity types:
+        - **PER**: Person names (e.g., "John Smith")
+        - **ORG**: Organizations (e.g., "Google", "Apple Inc.")
+        - **LOC**: Locations (e.g., "New York", "France")
+        - **MISC**: Miscellaneous entities
+
+        ## Models
+
+        - Models are auto-discovered from `models_dir/recognizers/`
+        - Supports quantized variants (model_i8.onnx)
+        - Compatible with HuggingFace BERT-based recognition models
+        - GLiNER models support custom entity labels via the `labels` parameter
+
+        ## Example
+
+        ```json
+        {
+          "model": "bert-base-ner",
+          "texts": ["John Smith works at Google.", "Apple Inc. is in Cupertino."]
+        }
+        ```
+      operationId: recognizeEntities
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecognizeRequest"
+      responses:
+        "200":
+          description: Entities extracted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecognizeResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Recognition service unavailable (no models configured)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /questionate:
+    post:
+      summary: Generate questions
+      description: |
+        Generate questions using Seq2Seq questionator models (T5, FLAN-T5, BART, etc.).
+
+        ## Models
+
+        - Models are auto-discovered from `models_dir/questionators/`
+        - Seq2Seq models have encoder.onnx, decoder-init.onnx, and decoder.onnx files
+        - Compatible with LMQG question generation models
+
+        ## Use Cases
+
+        - **Question Generation**: Generate questions from answer-context pairs
+        - **Query Generation**: Generate search queries from documents
+
+        ## Example
+
+        For question generation with LMQG models:
+        ```json
+        {
+          "model": "flan-t5-small-squad-qg",
+          "inputs": ["generate question: <hl> Beyonce <hl> Beyonce starred as Etta James in Cadillac Records."]
+        }
+        ```
+      operationId: generateQuestions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuestionGenerateRequest"
+      responses:
+        "200":
+          description: Questions generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuestionGenerateResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Model not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Generation service unavailable (no models configured)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /models:
     get:
       summary: List available models
       description: |
-        Returns lists of available embedding, chunking, reranking, and generator models.
+        Returns lists of available embedding, chunking, reranking, generator, NER, and question generation models.
 
         ## Embedders
 
@@ -899,6 +1180,16 @@ paths:
 
         - LLM models from `models_dir/generators/`
         - Empty if no models configured
+
+        ## Recognizers
+
+        - ONNX models from `models_dir/recognizers/`
+        - Includes GLiNER models for zero-shot recognition
+
+        ## Questionators
+
+        - Seq2Seq models from `models_dir/questionators/`
+        - T5, FLAN-T5, BART, and LMQG question generation models
 
         Models are discovered at service startup and cached.
       operationId: listModels
