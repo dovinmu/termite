@@ -1133,21 +1133,31 @@ func NewGeneratorRegistry(modelsDir string, sessionManager *hugot.SessionManager
 		modelName := entry.Name()
 		modelPath := filepath.Join(modelsDir, modelName)
 
-		// Check for model.onnx in root or onnx/ subdirectory
-		hasONNX := false
-		for _, subpath := range []string{"", "onnx"} {
-			checkPath := filepath.Join(modelPath, subpath, "model.onnx")
-			if _, err := os.Stat(checkPath); err == nil {
-				hasONNX = true
-				if subpath != "" {
-					modelPath = filepath.Join(modelPath, subpath)
+		// Check for genai_config.json (preferred) or model.onnx in root or onnx/ subdirectory
+		hasValidModel := false
+
+		// First check for genai_config.json (onnxruntime-genai native format)
+		genaiConfigPath := filepath.Join(modelPath, "genai_config.json")
+		if _, err := os.Stat(genaiConfigPath); err == nil {
+			hasValidModel = true
+		}
+
+		// Fall back to checking for model.onnx
+		if !hasValidModel {
+			for _, subpath := range []string{"", "onnx"} {
+				checkPath := filepath.Join(modelPath, subpath, "model.onnx")
+				if _, err := os.Stat(checkPath); err == nil {
+					hasValidModel = true
+					if subpath != "" {
+						modelPath = filepath.Join(modelPath, subpath)
+					}
+					break
 				}
-				break
 			}
 		}
 
-		if !hasONNX {
-			logger.Debug("Skipping directory - no model.onnx found",
+		if !hasValidModel {
+			logger.Debug("Skipping directory - no genai_config.json or model.onnx found",
 				zap.String("dir", modelName))
 			continue
 		}

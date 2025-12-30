@@ -38,6 +38,12 @@ type GenerateResult struct {
 	FinishReason string `json:"finish_reason"` // "stop" or "length"
 }
 
+// TokenDelta represents a single generated token in streaming mode.
+type TokenDelta struct {
+	Token string // The generated token text
+	Index int    // Sequence index (for batch generation, usually 0)
+}
+
 // Generator is the interface for text generation models.
 type Generator interface {
 	// Generate produces text from the given messages using the specified options.
@@ -45,4 +51,27 @@ type Generator interface {
 
 	// Close releases any resources held by the generator.
 	Close() error
+}
+
+// StreamingGenerator extends Generator with streaming support.
+// All generators in Termite implement streaming natively.
+// Use type assertion to access streaming:
+//
+//	if sg, ok := generator.(StreamingGenerator); ok {
+//	    tokens, errs, err := sg.GenerateStream(ctx, messages, opts)
+//	    // consume tokens channel
+//	}
+type StreamingGenerator interface {
+	Generator
+
+	// GenerateStream produces tokens one at a time via channels.
+	// Returns:
+	//   - tokens: channel of TokenDelta, closed when generation completes
+	//   - errs: channel of errors during generation, closed when done
+	//   - err: initialization error (if non-nil, channels are nil)
+	GenerateStream(ctx context.Context, messages []Message, opts GenerateOptions) (
+		tokens <-chan TokenDelta,
+		errs <-chan error,
+		err error,
+	)
 }

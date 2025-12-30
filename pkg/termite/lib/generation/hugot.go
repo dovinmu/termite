@@ -29,9 +29,11 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// Ensure HugotGenerator implements the Generator interface
+// Ensure HugotGenerator implements the Generator and StreamingGenerator interfaces
 var _ Generator = (*HugotGenerator)(nil)
+var _ StreamingGenerator = (*HugotGenerator)(nil)
 var _ Generator = (*PooledHugotGenerator)(nil)
+var _ StreamingGenerator = (*PooledHugotGenerator)(nil)
 
 // toHugotMessages converts internal Message types to Hugot's backends.Message format.
 func toHugotMessages(messages []Message) []backends.Message {
@@ -48,7 +50,7 @@ func toHugotMessages(messages []Message) []backends.Message {
 // HugotGenerator wraps a Hugot TextGenerationPipeline for LLM inference.
 type HugotGenerator struct {
 	session       *khugot.Session
-	pipeline      *pipelines.TextGenerationPipeline
+	pipeline      *pipelines.TextGenerationPipeline // streaming-enabled pipeline
 	logger        *zap.Logger
 	sessionShared bool // true if session is shared and shouldn't be destroyed
 }
@@ -90,7 +92,8 @@ func NewHugotGeneratorWithSession(modelPath string, sharedSession *khugot.Sessio
 		logger.Info("Created new Hugot session", zap.String("backend", hugot.BackendName()))
 	}
 
-	// Create text generation pipeline configuration
+	// Create text generation pipeline with streaming enabled
+	// We use a single streaming pipeline for both streaming and non-streaming calls
 	// Note: OnnxFilename is intentionally not set - generative models use genai_config.json
 	pipelineName := fmt.Sprintf("generator:%s", modelPath)
 	pipelineConfig := khugot.TextGenerationConfig{
@@ -98,10 +101,10 @@ func NewHugotGeneratorWithSession(modelPath string, sharedSession *khugot.Sessio
 		Name:      pipelineName,
 		Options: []backends.PipelineOption[*pipelines.TextGenerationPipeline]{
 			pipelines.WithMaxLength(2048),
+			pipelines.WithStreaming(),
 		},
 	}
 
-	// Create the pipeline
 	pipeline, err := khugot.NewPipeline(session, pipelineConfig)
 	if err != nil {
 		// Only destroy session if we created it (not shared)
@@ -111,7 +114,7 @@ func NewHugotGeneratorWithSession(modelPath string, sharedSession *khugot.Sessio
 		logger.Error("Failed to create pipeline", zap.Error(err))
 		return nil, fmt.Errorf("creating text generation pipeline: %w", err)
 	}
-	logger.Info("Successfully created text generation pipeline")
+	logger.Info("Successfully created streaming-enabled text generation pipeline")
 
 	return &HugotGenerator{
 		session:       session,
@@ -154,23 +157,23 @@ func NewHugotGeneratorWithSessionManager(modelPath string, sessionManager *hugot
 	logger.Info("Got session from SessionManager",
 		zap.String("backend", string(backendUsed)))
 
-	// Create text generation pipeline configuration
+	// Create text generation pipeline with streaming enabled
 	pipelineName := fmt.Sprintf("generator:%s", modelPath)
 	pipelineConfig := khugot.TextGenerationConfig{
 		ModelPath: modelPath,
 		Name:      pipelineName,
 		Options: []backends.PipelineOption[*pipelines.TextGenerationPipeline]{
 			pipelines.WithMaxLength(2048),
+			pipelines.WithStreaming(),
 		},
 	}
 
-	// Create the pipeline
 	pipeline, err := khugot.NewPipeline(session, pipelineConfig)
 	if err != nil {
 		logger.Error("Failed to create pipeline", zap.Error(err))
 		return nil, "", fmt.Errorf("creating text generation pipeline: %w", err)
 	}
-	logger.Info("Successfully created text generation pipeline")
+	logger.Info("Successfully created streaming-enabled text generation pipeline")
 
 	return &HugotGenerator{
 		session:       session,
@@ -181,6 +184,7 @@ func NewHugotGeneratorWithSessionManager(modelPath string, sessionManager *hugot
 }
 
 // Generate produces text from the given messages.
+// Uses the streaming pipeline internally and collects all tokens into the response.
 func (g *HugotGenerator) Generate(ctx context.Context, messages []Message, opts GenerateOptions) (*GenerateResult, error) {
 	if len(messages) == 0 {
 		return nil, errors.New("messages are required")
@@ -191,7 +195,7 @@ func (g *HugotGenerator) Generate(ctx context.Context, messages []Message, opts 
 		zap.Int("maxTokens", opts.MaxTokens),
 	)
 
-	// Convert messages to Hugot format and run generation
+	// Convert messages to Hugot format and run streaming generation
 	hugotMessages := toHugotMessages(messages)
 	output, err := g.pipeline.RunMessages(ctx, [][]backends.Message{hugotMessages})
 	if err != nil {
@@ -199,24 +203,89 @@ func (g *HugotGenerator) Generate(ctx context.Context, messages []Message, opts 
 		return nil, fmt.Errorf("running text generation: %w", err)
 	}
 
-	// Get the first response from the batch
-	generatedText := ""
-	if len(output.Responses) > 0 {
-		generatedText = output.Responses[0]
+	// Collect all tokens from the stream
+	var generatedText string
+	var tokenCount int
+	var genErr error
+
+	for delta := range output.TokenStream {
+		generatedText += delta.Token
+		tokenCount++
+	}
+
+	// Check for errors from the error stream
+	for err := range output.ErrorStream {
+		genErr = err
+	}
+
+	if genErr != nil {
+		g.logger.Error("Generation error", zap.Error(genErr))
+		return nil, fmt.Errorf("generation error: %w", genErr)
 	}
 
 	result := &GenerateResult{
 		Text:         generatedText,
-		TokensUsed:   0, // Token count not directly available from new API
+		TokensUsed:   tokenCount,
 		FinishReason: "stop",
 	}
 
 	g.logger.Debug("Generation complete",
 		zap.Int("responseLength", len(generatedText)),
+		zap.Int("tokensGenerated", tokenCount),
 		zap.String("finishReason", result.FinishReason),
 	)
 
 	return result, nil
+}
+
+// GenerateStream produces tokens one at a time via channels.
+func (g *HugotGenerator) GenerateStream(ctx context.Context, messages []Message, opts GenerateOptions) (<-chan TokenDelta, <-chan error, error) {
+	if len(messages) == 0 {
+		return nil, nil, errors.New("messages are required")
+	}
+
+	g.logger.Debug("Starting streaming generation",
+		zap.Int("numMessages", len(messages)),
+		zap.Int("maxTokens", opts.MaxTokens),
+	)
+
+	// Convert messages to Hugot format and run streaming generation
+	hugotMessages := toHugotMessages(messages)
+	output, err := g.pipeline.RunMessages(ctx, [][]backends.Message{hugotMessages})
+	if err != nil {
+		g.logger.Error("Streaming pipeline generation failed", zap.Error(err))
+		return nil, nil, fmt.Errorf("running streaming text generation: %w", err)
+	}
+
+	// Adapt hugot's channels to our TokenDelta format
+	tokenChan := make(chan TokenDelta)
+	errChan := make(chan error, 1)
+
+	go func() {
+		defer close(tokenChan)
+		defer close(errChan)
+
+		// Read from hugot's token stream
+		for delta := range output.TokenStream {
+			select {
+			case <-ctx.Done():
+				return
+			case tokenChan <- TokenDelta{Token: delta.Token, Index: delta.Index}:
+			}
+		}
+
+		// Forward any errors
+		for err := range output.ErrorStream {
+			select {
+			case errChan <- err:
+			default:
+			}
+		}
+
+		g.logger.Debug("Streaming generation complete")
+	}()
+
+	return tokenChan, errChan, nil
 }
 
 // Close releases resources.
@@ -285,7 +354,7 @@ func NewPooledHugotGeneratorWithSession(modelPath string, poolSize int, sharedSe
 		logger.Info("Created new Hugot session", zap.String("backend", hugot.BackendName()))
 	}
 
-	// Create N pipelines with unique names
+	// Create N streaming-enabled pipelines with unique names
 	// Note: OnnxFilename is intentionally not set - generative models use genai_config.json
 	pipelinesList := make([]*pipelines.TextGenerationPipeline, poolSize)
 	for i := 0; i < poolSize; i++ {
@@ -295,6 +364,7 @@ func NewPooledHugotGeneratorWithSession(modelPath string, poolSize int, sharedSe
 			Name:      pipelineName,
 			Options: []backends.PipelineOption[*pipelines.TextGenerationPipeline]{
 				pipelines.WithMaxLength(2048),
+				pipelines.WithStreaming(),
 			},
 		}
 
@@ -310,10 +380,10 @@ func NewPooledHugotGeneratorWithSession(modelPath string, poolSize int, sharedSe
 			return nil, fmt.Errorf("creating text generation pipeline %d: %w", i, err)
 		}
 		pipelinesList[i] = pipeline
-		logger.Debug("Created pipeline", zap.Int("index", i), zap.String("name", pipelineName))
+		logger.Debug("Created streaming-enabled pipeline", zap.Int("index", i), zap.String("name", pipelineName))
 	}
 
-	logger.Info("Successfully created pooled text generation pipelines", zap.Int("count", poolSize))
+	logger.Info("Successfully created pooled streaming-enabled pipelines", zap.Int("count", poolSize))
 
 	return &PooledHugotGenerator{
 		session:       session,
@@ -327,6 +397,7 @@ func NewPooledHugotGeneratorWithSession(modelPath string, poolSize int, sharedSe
 
 // Generate produces text from the given messages.
 // Thread-safe: uses semaphore to limit concurrent pipeline access.
+// Uses the streaming pipeline internally and collects all tokens into the response.
 func (p *PooledHugotGenerator) Generate(ctx context.Context, messages []Message, opts GenerateOptions) (*GenerateResult, error) {
 	if len(messages) == 0 {
 		return nil, errors.New("messages are required")
@@ -346,7 +417,7 @@ func (p *PooledHugotGenerator) Generate(ctx context.Context, messages []Message,
 		zap.Int("pipelineIndex", idx),
 		zap.Int("numMessages", len(messages)))
 
-	// Convert messages to Hugot format and run generation
+	// Convert messages to Hugot format and run streaming generation
 	hugotMessages := toHugotMessages(messages)
 	output, err := pipeline.RunMessages(ctx, [][]backends.Message{hugotMessages})
 	if err != nil {
@@ -356,24 +427,104 @@ func (p *PooledHugotGenerator) Generate(ctx context.Context, messages []Message,
 		return nil, fmt.Errorf("running text generation: %w", err)
 	}
 
-	// Get the first response from the batch
-	generatedText := ""
-	if len(output.Responses) > 0 {
-		generatedText = output.Responses[0]
+	// Collect all tokens from the stream
+	var generatedText string
+	var tokenCount int
+	var genErr error
+
+	for delta := range output.TokenStream {
+		generatedText += delta.Token
+		tokenCount++
+	}
+
+	// Check for errors from the error stream
+	for err := range output.ErrorStream {
+		genErr = err
+	}
+
+	if genErr != nil {
+		p.logger.Error("Generation error",
+			zap.Int("pipelineIndex", idx),
+			zap.Error(genErr))
+		return nil, fmt.Errorf("generation error: %w", genErr)
 	}
 
 	result := &GenerateResult{
 		Text:         generatedText,
-		TokensUsed:   0, // Token count not directly available from new API
+		TokensUsed:   tokenCount,
 		FinishReason: "stop",
 	}
 
 	p.logger.Debug("Generation complete",
 		zap.Int("pipelineIndex", idx),
 		zap.Int("responseLength", len(generatedText)),
+		zap.Int("tokensGenerated", tokenCount),
 		zap.String("finishReason", result.FinishReason))
 
 	return result, nil
+}
+
+// GenerateStream produces tokens one at a time via channels.
+// Thread-safe: uses semaphore to limit concurrent pipeline access.
+func (p *PooledHugotGenerator) GenerateStream(ctx context.Context, messages []Message, opts GenerateOptions) (<-chan TokenDelta, <-chan error, error) {
+	if len(messages) == 0 {
+		return nil, nil, errors.New("messages are required")
+	}
+
+	// Acquire semaphore slot (blocks if all pipelines busy)
+	if err := p.sem.Acquire(ctx, 1); err != nil {
+		return nil, nil, fmt.Errorf("acquiring pipeline slot: %w", err)
+	}
+
+	// Round-robin pipeline selection
+	idx := int(p.nextPipeline.Add(1) % uint64(p.poolSize))
+	pipeline := p.pipelines[idx]
+
+	p.logger.Debug("Using pipeline for streaming generation",
+		zap.Int("pipelineIndex", idx),
+		zap.Int("numMessages", len(messages)))
+
+	// Convert messages to Hugot format and run streaming generation
+	hugotMessages := toHugotMessages(messages)
+	output, err := pipeline.RunMessages(ctx, [][]backends.Message{hugotMessages})
+	if err != nil {
+		p.sem.Release(1)
+		p.logger.Error("Streaming pipeline generation failed",
+			zap.Int("pipelineIndex", idx),
+			zap.Error(err))
+		return nil, nil, fmt.Errorf("running streaming text generation: %w", err)
+	}
+
+	// Adapt hugot's channels to our TokenDelta format
+	tokenChan := make(chan TokenDelta)
+	errChan := make(chan error, 1)
+
+	go func() {
+		defer p.sem.Release(1) // Release semaphore when done streaming
+		defer close(tokenChan)
+		defer close(errChan)
+
+		// Read from hugot's token stream
+		for delta := range output.TokenStream {
+			select {
+			case <-ctx.Done():
+				return
+			case tokenChan <- TokenDelta{Token: delta.Token, Index: delta.Index}:
+			}
+		}
+
+		// Forward any errors
+		for err := range output.ErrorStream {
+			select {
+			case errChan <- err:
+			default:
+			}
+		}
+
+		p.logger.Debug("Streaming generation complete", zap.Int("pipelineIndex", idx))
+	}()
+
+	return tokenChan, errChan, nil
 }
 
 // Close releases resources.
