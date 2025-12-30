@@ -17,7 +17,12 @@ package ner
 
 import (
 	"context"
+	"errors"
 )
+
+// ErrNotSupported is returned when a model doesn't support a particular operation.
+// Check capabilities before calling methods to avoid this error.
+var ErrNotSupported = errors.New("operation not supported by this model")
 
 // Entity represents a named entity extracted from text.
 type Entity struct {
@@ -41,21 +46,6 @@ type Model interface {
 
 	// Close releases any resources held by the model.
 	Close() error
-}
-
-// Recognizer extends Model with zero-shot NER capabilities.
-// Models implementing this interface can recognize any entity types specified
-// at inference time without requiring model retraining (e.g., GLiNER).
-type Recognizer interface {
-	Model
-
-	// RecognizeWithLabels extracts entities of the specified types.
-	// For zero-shot models like GLiNER, labels can be arbitrary entity types.
-	// For traditional NER models, labels should match the trained entity types.
-	RecognizeWithLabels(ctx context.Context, texts []string, labels []string) ([][]Entity, error)
-
-	// Labels returns the default entity labels this model uses.
-	Labels() []string
 }
 
 // Relation represents a relationship between two entities.
@@ -82,18 +72,38 @@ type Answer struct {
 	Score float32 `json:"score"`
 }
 
-// Extractor extends Recognizer with advanced extraction capabilities.
-// Multitask models like GLiNER can extract relations and answer questions.
-type Extractor interface {
-	Recognizer
+// Recognizer extends Model with zero-shot NER and extraction capabilities.
+// Models implementing this interface can recognize any entity types specified
+// at inference time without requiring model retraining (e.g., GLiNER, REBEL).
+//
+// Not all models support all methods. Use capabilities to check support:
+//   - "labels": Supports RecognizeWithLabels
+//   - "zeroshot": Supports arbitrary labels at inference time
+//   - "relations": Supports ExtractRelations
+//   - "answers": Supports ExtractAnswers
+//
+// Methods return ErrNotSupported if the model lacks the required capability.
+type Recognizer interface {
+	Model
+
+	// RecognizeWithLabels extracts entities of the specified types.
+	// For zero-shot models like GLiNER, labels can be arbitrary entity types.
+	// For traditional NER models, labels should match the trained entity types.
+	RecognizeWithLabels(ctx context.Context, texts []string, labels []string) ([][]Entity, error)
+
+	// Labels returns the default entity labels this model uses.
+	Labels() []string
 
 	// ExtractRelations extracts both entities and relationships between them.
+	// Returns ErrNotSupported if the model doesn't have the "relations" capability.
 	ExtractRelations(ctx context.Context, texts []string, entityLabels []string, relationLabels []string) ([][]Entity, [][]Relation, error)
 
 	// ExtractAnswers performs extractive question answering.
 	// Given questions and contexts, extracts answer spans from the contexts.
+	// Returns ErrNotSupported if the model doesn't have the "answers" capability.
 	ExtractAnswers(ctx context.Context, questions []string, contexts []string) ([]Answer, error)
 
 	// RelationLabels returns the default relation labels this model uses.
+	// Returns nil if the model doesn't support relation extraction.
 	RelationLabels() []string
 }

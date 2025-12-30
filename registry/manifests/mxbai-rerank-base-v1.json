@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "name": "mxbai-rerank-base-v1",
+  "type": "reranker",
+  "description": "",
+  "source": "mixedbread-ai/mxbai-rerank-base-v1",
+  "files": [
+    {
+      "name": "model.onnx",
+      "digest": "sha256:f87e2c3873d4e0f5bff2c5b20a59293dad4acee85d3bba110d2e1ae2beede82b",
+      "size": 738601919
+    },
+    {
+      "name": "tokenizer.json",
+      "digest": "sha256:3260907dc136dd56139986bd8fb6cc98303e0a4dcadb4bad170f0fe364b4aa47",
+      "size": 8649117
+    },
+    {
+      "name": "config.json",
+      "digest": "sha256:c58f34b2c8231aa6bd7be27041fcf45f40a0c6c461258b89ecce871e2186cf35",
+      "size": 928
+    },
+    {
+      "name": "tokenizer_config.json",
+      "digest": "sha256:0fa8383c07719ad32e22ee9a127605c5ee0f807fdde5e066a5149980ccd8367e",
+      "size": 1481
+    },
+    {
+      "name": "special_tokens_map.json",
+      "digest": "sha256:b2f1b2f15f29a6b6d9d6ea4eca1675d2c231a71477f151d48f79cc83a625ba21",
+      "size": 970
+    }
+  ],
+  "variants": {
+    "f16": {
+      "name": "model_f16.onnx",
+      "digest": "sha256:ff91d7dcaf8ca55a2852d355d6f357c8453319d22394e1fd0d42ca8bbfb3f073",
+      "size": 370099139
+    },
+    "i8": {
+      "name": "model_i8.onnx",
+      "digest": "sha256:dab335dff0dfb65a84c2baf1fd54894574882f9d02c65e268e0074f99f241a23",
+      "size": 244066709
+    }
+  }
+}

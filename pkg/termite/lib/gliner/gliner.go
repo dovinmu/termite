@@ -30,9 +30,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// Ensure HugotGLiNER implements the required interfaces
+// Ensure HugotGLiNER implements ner.Recognizer
 var _ ner.Recognizer = (*HugotGLiNER)(nil)
-var _ ner.Extractor = (*HugotGLiNER)(nil)
 
 // GLiNERModelType represents the type of GLiNER model architecture
 type GLiNERModelType string

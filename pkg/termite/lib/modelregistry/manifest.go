@@ -306,6 +306,9 @@ func (m *ModelManifest) Validate() error {
 		if !hasEncoderOnnx || !hasDecoderOnnx {
 			return fmt.Errorf("rewriter model must include encoder.onnx and decoder.onnx")
 		}
+	} else if hasEncoderOnnx && hasDecoderOnnx {
+		// Seq2seq recognizers (REBEL) have encoder/decoder instead of model.onnx
+		// This is valid for recognizers with 'relations' capability
 	} else {
 		// Standard models require model.onnx
 		if !hasModelOnnx {

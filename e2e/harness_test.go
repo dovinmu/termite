@@ -33,6 +33,7 @@ var testModels = []string{
 	"bge-small-en-v1.5",
 	"clip-vit-base-patch32",
 	"flan-t5-small-squad-qg",
+	"rebel-large",
 	// Uncomment when needed - these are larger models
 	// "chonky-mmbert-small-multilingual-1",
 	// "mxbai-rerank-base-v1",
@@ -123,6 +124,8 @@ func downloadTestModels() error {
 			modelPath = filepath.Join(testModelsDir, "chunkers", modelName)
 		case "flan-t5-small-squad-qg":
 			modelPath = filepath.Join(testModelsDir, "rewriters", modelName)
+		case "rebel-large":
+			modelPath = filepath.Join(testModelsDir, "recognizers", modelName)
 		default:
 			modelPath = filepath.Join(testModelsDir, "embedders", modelName)
 		}

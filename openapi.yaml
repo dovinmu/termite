@@ -360,11 +360,7 @@ paths:
                 $ref: '#/components/schemas/GenerateResponse'
             text/event-stream:
               schema:
-                type: string
-                description: |
-                  Stream of SSE events containing ChatCompletionChunk objects.
-                  Each line is prefixed with "data: " followed by JSON.
-                  Stream ends with "data: [DONE]".
+                $ref: '#/components/schemas/GenerateChunk'
         '400':
           description: Invalid request
           content:
@@ -918,6 +914,41 @@ components:
             - company
             - product
             - date
+        relation_labels:
+          type: array
+          items:
+            type: string
+          description: |
+            Relation types to extract (for models with 'relations' capability).
+            Only used when the model supports relation extraction (GLiNER multitask, REBEL).
+            If not provided, the model extracts all relations it can detect.
+          example:
+            - founded
+            - works_at
+            - located_in
+    Relation:
+      type: object
+      required:
+        - head
+        - tail
+        - label
+        - score
+      properties:
+        head:
+          $ref: '#/components/schemas/RecognizeEntity'
+          description: The subject/head entity in the relationship
+        tail:
+          $ref: '#/components/schemas/RecognizeEntity'
+          description: The object/tail entity in the relationship
+        label:
+          type: string
+          description: The relationship type
+          example: founded
+        score:
+          type: number
+          format: float
+          description: Confidence score for the relation (0.0 to 1.0)
+          example: 0.95
     RecognizeResponse:
       type: object
       required:
@@ -934,6 +965,15 @@ components:
             items:
               $ref: '#/components/schemas/RecognizeEntity'
           description: Array of entity arrays (one per input text)
+        relations:
+          type: array
+          items:
+            type: array
+            items:
+              $ref: '#/components/schemas/Relation'
+          description: |
+            Array of relation arrays (one per input text).
+            Only present when using a model with 'relations' capability (GLiNER multitask, REBEL).
     RewriteRequest:
       type: object
       required:
@@ -1089,14 +1129,13 @@ components:
       description: The role of a message sender in a conversation
     FinishReason:
       type: string
-      nullable: true
       enum:
         - stop
         - length
         - tool_calls
         - content_filter
         - function_call
-      description: Reason why generation stopped (null if still generating)
+      description: Reason why generation stopped
     ChatMessage:
       type: object
       required:
