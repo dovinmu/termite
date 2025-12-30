@@ -480,6 +480,46 @@ components:
             type: string
           description: Available Seq2Seq rewriter models from models_dir/rewriters/
           example: ["flan-t5-small", "lmqg-question-generation"]
+        recognizer_info:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/RecognizerModelInfo'
+          description: |
+            Detailed information about recognizer models including capabilities.
+            Map of model name to model info. Use this to determine what capabilities
+            each recognizer supports (labels, zeroshot, relations, answers).
+          example:
+            bert-base-ner:
+              capabilities: ["labels"]
+            gliner-small:
+              capabilities: ["labels", "zeroshot"]
+            gliner-multitask:
+              capabilities: ["labels", "zeroshot", "relations", "answers"]
+
+    RecognizerCapability:
+      type: string
+      enum:
+        - labels
+        - zeroshot
+        - relations
+        - answers
+      description: |
+        Capability that a recognizer model supports:
+        - labels: Entity extraction (NER) - extracts labeled spans like PER, ORG, LOC
+        - zeroshot: Supports arbitrary labels at inference time (GLiNER models)
+        - relations: Relation extraction between entities (GLiNER multitask, REBEL)
+        - answers: Extractive question answering (GLiNER multitask)
+
+    RecognizerModelInfo:
+      type: object
+      description: Detailed information about a recognizer model
+      properties:
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecognizerCapability'
+          description: List of capabilities this recognizer model supports
+          example: ["labels", "zeroshot"]
 
     # Generation Types (LLM/Chat)
     Role:
@@ -489,14 +529,13 @@ components:
 
     FinishReason:
       type: string
-      nullable: true
       enum:
         - stop
         - length
         - tool_calls
         - content_filter
         - function_call
-      description: Reason why generation stopped (null if still generating)
+      description: Reason why generation stopped
 
     ChatMessage:
       type: object
@@ -1149,11 +1188,7 @@ paths:
                 $ref: "#/components/schemas/GenerateResponse"
             text/event-stream:
               schema:
-                type: string
-                description: |
-                  Stream of SSE events containing ChatCompletionChunk objects.
-                  Each line is prefixed with "data: " followed by JSON.
-                  Stream ends with "data: [DONE]".
+                $ref: "#/components/schemas/GenerateChunk"
         "400":
           description: Invalid request
           content:
