@@ -32,6 +32,7 @@ import (
 	"github.com/antflydb/termite/pkg/termite/lib/hugot"
 	"github.com/antflydb/termite/pkg/termite/lib/modelregistry"
 	"github.com/antflydb/termite/pkg/termite/lib/ner"
+	"github.com/antflydb/termite/pkg/termite/lib/rebel"
 	termreranking "github.com/antflydb/termite/pkg/termite/lib/reranking"
 	"github.com/antflydb/termite/pkg/termite/lib/seq2seq"
 	"github.com/antflydb/termite/pkg/termite/lib/generation"
@@ -561,7 +562,7 @@ func (r *EmbedderRegistry) Close() error {
 // NERRegistry manages multiple NER (Named Entity Recognition) models loaded from a directory
 type NERRegistry struct {
 	models       map[string]ner.Model      // model name -> NER model instance
-	recognizers  map[string]ner.Recognizer // model name -> zero-shot capable Recognizer (e.g., GLiNER)
+	recognizers  map[string]ner.Recognizer // model name -> zero-shot capable Recognizer (e.g., GLiNER, REBEL)
 	capabilities map[string][]string       // model name -> list of capabilities (labels, zeroshot, relations, answers)
 	mu           sync.RWMutex
 	logger       *zap.Logger
@@ -633,10 +634,42 @@ func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logg
 		modelName := entry.Name()
 		modelPath := filepath.Join(modelsDir, modelName)
 
-		// Check if this is a GLiNER model
+		// Check model type: GLiNER, REBEL, or traditional NER
 		isGLiNER := gliner.IsGLiNERModel(modelPath)
+		isREBEL := rebel.IsREBELModel(modelPath)
 
-		if isGLiNER {
+		if isREBEL {
+			// Load REBEL relation extraction model
+			logger.Info("Discovered REBEL model directory",
+				zap.String("name", modelName),
+				zap.String("path", modelPath))
+
+			model, backendUsed, err := rebel.NewHugotREBELWithSessionManager(modelPath, sessionManager, logger.Named(modelName))
+			if err != nil {
+				logger.Warn("Failed to load REBEL model",
+					zap.String("name", modelName),
+					zap.Error(err))
+			} else {
+				// REBEL implements ner.Recognizer with relation extraction capability
+				registry.recognizers[modelName] = model
+				registry.models[modelName] = model
+				// REBEL models have 'relations' capability
+				caps := []string{modelregistry.CapabilityRelations}
+				// Check manifest for additional capabilities
+				manifestPath := filepath.Join(modelPath, "manifest.json")
+				if data, err := os.ReadFile(manifestPath); err == nil {
+					var manifest modelregistry.ModelManifest
+					if err := json.Unmarshal(data, &manifest); err == nil && len(manifest.Capabilities) > 0 {
+						caps = manifest.Capabilities
+					}
+				}
+				registry.capabilities[modelName] = caps
+				logger.Info("Successfully loaded REBEL model",
+					zap.String("name", modelName),
+					zap.String("backend", string(backendUsed)),
+					zap.Strings("capabilities", caps))
+			}
+		} else if isGLiNER {
 			// Load GLiNER model (no variants, uses model.onnx or model_quantized.onnx)
 			logger.Info("Discovered GLiNER model directory",
 				zap.String("name", modelName),

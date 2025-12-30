@@ -360,11 +360,7 @@ paths:
                 $ref: '#/components/schemas/GenerateResponse'
             text/event-stream:
               schema:
-                type: string
-                description: |
-                  Stream of SSE events containing ChatCompletionChunk objects.
-                  Each line is prefixed with "data: " followed by JSON.
-                  Stream ends with "data: [DONE]".
+                $ref: '#/components/schemas/GenerateChunk'
         '400':
           description: Invalid request
           content:
@@ -1089,14 +1085,13 @@ components:
       description: The role of a message sender in a conversation
     FinishReason:
       type: string
-      nullable: true
       enum:
         - stop
         - length
         - tool_calls
         - content_filter
         - function_call
-      description: Reason why generation stopped (null if still generating)
+      description: Reason why generation stopped
     ChatMessage:
       type: object
       required:
