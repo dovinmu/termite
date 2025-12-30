@@ -601,9 +601,10 @@ func (ln *TermiteNode) handleApiRecognize(w http.ResponseWriter, r *http.Request
 
 	// Decode request
 	var req struct {
-		Model  string   `json:"model"`  // Model name to use (required)
-		Texts  []string `json:"texts"`  // Texts to extract entities from
-		Labels []string `json:"labels"` // Custom labels for GLiNER models (optional)
+		Model          string   `json:"model"`           // Model name to use (required)
+		Texts          []string `json:"texts"`           // Texts to extract entities from
+		Labels         []string `json:"labels"`          // Custom labels for GLiNER models (optional)
+		RelationLabels []string `json:"relation_labels"` // Relation types to extract (optional, for models with relations capability)
 	}
 	if err := decoder.NewStreamDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -621,26 +622,55 @@ func (ln *TermiteNode) handleApiRecognize(w http.ResponseWriter, r *http.Request
 	}
 
 	var entities [][]ner.Entity
+	var relations [][]ner.Relation
 
-	// Check if this is a zero-shot Recognizer with custom labels
-	if len(req.Labels) > 0 && ln.nerRegistry.IsRecognizer(req.Model) {
-		// Use Recognizer with custom labels (zero-shot NER)
+	// Check if the model supports relations and we should extract them
+	hasRelationsCap := ln.nerRegistry.HasCapability(req.Model, "relations")
+
+	// Check if this is a Recognizer (zero-shot capable)
+	if ln.nerRegistry.IsRecognizer(req.Model) {
 		recognizer, err := ln.nerRegistry.GetRecognizer(req.Model)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Recognizer not found: %s", req.Model), http.StatusNotFound)
 			return
 		}
 
-		// Recognize with custom labels
-		entities, err = recognizer.RecognizeWithLabels(r.Context(), req.Texts, req.Labels)
-		if err != nil {
-			ln.logger.Error("Recognition failed",
-				zap.String("model", req.Model),
-				zap.Strings("labels", req.Labels),
-				zap.Int("num_texts", len(req.Texts)),
-				zap.Error(err))
-			http.Error(w, fmt.Sprintf("Recognition failed: %v", err), http.StatusInternalServerError)
-			return
+		// If model supports relations, use ExtractRelations to get both entities and relations
+		if hasRelationsCap {
+			entities, relations, err = recognizer.ExtractRelations(r.Context(), req.Texts, req.Labels, req.RelationLabels)
+			if err != nil {
+				ln.logger.Error("Relation extraction failed",
+					zap.String("model", req.Model),
+					zap.Strings("labels", req.Labels),
+					zap.Strings("relation_labels", req.RelationLabels),
+					zap.Int("num_texts", len(req.Texts)),
+					zap.Error(err))
+				http.Error(w, fmt.Sprintf("Relation extraction failed: %v", err), http.StatusInternalServerError)
+				return
+			}
+		} else if len(req.Labels) > 0 {
+			// Use Recognizer with custom labels (zero-shot NER)
+			entities, err = recognizer.RecognizeWithLabels(r.Context(), req.Texts, req.Labels)
+			if err != nil {
+				ln.logger.Error("Recognition failed",
+					zap.String("model", req.Model),
+					zap.Strings("labels", req.Labels),
+					zap.Int("num_texts", len(req.Texts)),
+					zap.Error(err))
+				http.Error(w, fmt.Sprintf("Recognition failed: %v", err), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			// Use Recognizer without custom labels (use default labels)
+			entities, err = recognizer.RecognizeWithLabels(r.Context(), req.Texts, recognizer.Labels())
+			if err != nil {
+				ln.logger.Error("Recognition failed",
+					zap.String("model", req.Model),
+					zap.Int("num_texts", len(req.Texts)),
+					zap.Error(err))
+				http.Error(w, fmt.Sprintf("Recognition failed: %v", err), http.StatusInternalServerError)
+				return
+			}
 		}
 	} else {
 		// Get standard NER model from registry
@@ -676,7 +706,8 @@ func (ln *TermiteNode) handleApiRecognize(w http.ResponseWriter, r *http.Request
 	ln.logger.Info("NER request completed",
 		zap.String("model", req.Model),
 		zap.Int("num_texts", len(req.Texts)),
-		zap.Int("total_entities", totalEntities))
+		zap.Int("total_entities", totalEntities),
+		zap.Int("total_relations", countRelations(relations)))
 
 	// Convert internal Entity type to API response type
 	apiEntities := make([][]RecognizeEntity, len(entities))
@@ -693,10 +724,40 @@ func (ln *TermiteNode) handleApiRecognize(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	// Convert internal Relation type to API response type
+	var apiRelations [][]Relation
+	if len(relations) > 0 {
+		apiRelations = make([][]Relation, len(relations))
+		for i, textRelations := range relations {
+			apiRelations[i] = make([]Relation, len(textRelations))
+			for j, rel := range textRelations {
+				apiRelations[i][j] = Relation{
+					Head: RecognizeEntity{
+						Text:  rel.HeadEntity.Text,
+						Label: rel.HeadEntity.Label,
+						Start: rel.HeadEntity.Start,
+						End:   rel.HeadEntity.End,
+						Score: rel.HeadEntity.Score,
+					},
+					Tail: RecognizeEntity{
+						Text:  rel.TailEntity.Text,
+						Label: rel.TailEntity.Label,
+						Start: rel.TailEntity.Start,
+						End:   rel.TailEntity.End,
+						Score: rel.TailEntity.Score,
+					},
+					Label: rel.Label,
+					Score: rel.Score,
+				}
+			}
+		}
+	}
+
 	// Send response
 	nerResp := RecognizeResponse{
-		Model:    req.Model,
-		Entities: apiEntities,
+		Model:     req.Model,
+		Entities:  apiEntities,
+		Relations: apiRelations,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -705,6 +766,15 @@ func (ln *TermiteNode) handleApiRecognize(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+}
+
+// countRelations returns the total number of relations across all texts
+func countRelations(relations [][]ner.Relation) int {
+	total := 0
+	for _, textRelations := range relations {
+		total += len(textRelations)
+	}
+	return total
 }
 
 // generateCompletionID generates a unique ID like OpenAI's "chatcmpl-xxx" format

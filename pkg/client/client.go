@@ -293,6 +293,42 @@ func (c *TermiteClient) Recognize(ctx context.Context, model string, texts []str
 	return resp.JSON200, nil
 }
 
+// ExtractRelations extracts entities and relations between them from text.
+// Uses models with the "relations" capability (e.g., REBEL, GLiNER multitask).
+// entityLabels specifies the entity types to extract (optional, uses model defaults if empty).
+// relationLabels specifies the relation types to extract (optional, uses model defaults if empty).
+func (c *TermiteClient) ExtractRelations(ctx context.Context, model string, texts []string, entityLabels []string, relationLabels []string) (*oapi.RecognizeResponse, error) {
+	req := oapi.RecognizeRequest{
+		Model:          model,
+		Texts:          texts,
+		Labels:         entityLabels,
+		RelationLabels: relationLabels,
+	}
+
+	resp, err := c.client.RecognizeEntitiesWithResponse(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("sending request: %w", err)
+	}
+
+	if resp.JSON400 != nil {
+		return nil, fmt.Errorf("bad request: %s", resp.JSON400.Error)
+	}
+	if resp.JSON404 != nil {
+		return nil, fmt.Errorf("model not found: %s", resp.JSON404.Error)
+	}
+	if resp.JSON500 != nil {
+		return nil, fmt.Errorf("server error: %s", resp.JSON500.Error)
+	}
+	if resp.JSON503 != nil {
+		return nil, fmt.Errorf("service unavailable: %s", resp.JSON503.Error)
+	}
+	if resp.JSON200 == nil {
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode(), string(resp.Body))
+	}
+
+	return resp.JSON200, nil
+}
+
 // RewriteText rewrites input texts using a Seq2Seq rewriter model.
 func (c *TermiteClient) RewriteText(ctx context.Context, model string, inputs []string) (*oapi.RewriteResponse, error) {
 	req := oapi.RewriteRequest{
