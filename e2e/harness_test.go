@@ -122,7 +122,7 @@ func downloadTestModels() error {
 		case "chonky-mmbert-small-multilingual-1":
 			modelPath = filepath.Join(testModelsDir, "chunkers", modelName)
 		case "flan-t5-small-squad-qg":
-			modelPath = filepath.Join(testModelsDir, "questionators", modelName)
+			modelPath = filepath.Join(testModelsDir, "rewriters", modelName)
 		default:
 			modelPath = filepath.Join(testModelsDir, "embedders", modelName)
 		}
@@ -176,8 +176,8 @@ func downloadHuggingFaceModels() error {
 		switch model.modelType {
 		case modelregistry.ModelTypeRecognizer:
 			modelPath = filepath.Join(testModelsDir, "recognizers", model.name)
-		case modelregistry.ModelTypeQuestionator:
-			modelPath = filepath.Join(testModelsDir, "questionators", model.name)
+		case modelregistry.ModelTypeRewriter:
+			modelPath = filepath.Join(testModelsDir, "rewriters", model.name)
 		default:
 			modelPath = filepath.Join(testModelsDir, model.name)
 		}
@@ -237,7 +237,12 @@ func getRecognizerModelsDir() string {
 	return filepath.Join(testModelsDir, "recognizers")
 }
 
-// getQuestionatorModelsDir returns the questionators subdirectory
-func getQuestionatorModelsDir() string {
-	return filepath.Join(testModelsDir, "questionators")
+// getRewriterModelsDir returns the rewriters subdirectory
+func getRewriterModelsDir() string {
+	return filepath.Join(testModelsDir, "rewriters")
+}
+
+// getGeneratorModelsDir returns the generators subdirectory
+func getGeneratorModelsDir() string {
+	return filepath.Join(testModelsDir, "generators")
 }

@@ -35,6 +35,7 @@ concurrency:
 env:
   TOKENIZERS_VERSION: "1.24.0"
   ONNXRUNTIME_VERSION: "1.23.2"
+  GENAI_VERSION: "0.6.0"
   PJRT_CPU_VERSION: "0.83.1"
 
 jobs:
@@ -104,6 +105,17 @@ jobs:
           echo "CGO_LDFLAGS=-L/tmp/onnxruntime/lib -lonnxruntime" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=/tmp/onnxruntime/lib:/usr/local/lib" >> $GITHUB_ENV
           echo "ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so" >> $GITHUB_ENV
+
+      - name: Download ONNX Runtime GenAI
+        if: matrix.backend == 'onnx' || matrix.backend == 'omni'
+        run: |
+          ARCH=$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "x64")
+          mkdir -p /tmp/onnxruntime-genai
+          curl -fsSL "https://github.com/microsoft/onnxruntime-genai/releases/download/v${GENAI_VERSION}/onnxruntime-genai-${GENAI_VERSION}-linux-${ARCH}.tar.gz" \
+            | tar -xzf - --strip-components=1 -C /tmp/onnxruntime-genai
+          # Copy GenAI libraries to the onnxruntime lib directory
+          cp /tmp/onnxruntime-genai/lib/libonnxruntime-genai*.so* /tmp/onnxruntime/lib/ 2>/dev/null || true
+          echo "ORTGENAI_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime-genai.so" >> $GITHUB_ENV
 
       - name: Download PJRT CPU plugin
         if: matrix.backend == 'xla' || matrix.backend == 'omni'
@@ -192,6 +204,16 @@ jobs:
           echo "CGO_LDFLAGS=-L/tmp/onnxruntime/lib -lonnxruntime" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=/tmp/onnxruntime/lib:/usr/local/lib" >> $GITHUB_ENV
           echo "ORT_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime.so" >> $GITHUB_ENV
+
+      - name: Download ONNX Runtime GenAI
+        run: |
+          ARCH=$([ "$(uname -m)" = "aarch64" ] && echo "arm64" || echo "x64")
+          mkdir -p /tmp/onnxruntime-genai
+          curl -fsSL "https://github.com/microsoft/onnxruntime-genai/releases/download/v${GENAI_VERSION}/onnxruntime-genai-${GENAI_VERSION}-linux-${ARCH}.tar.gz" \
+            | tar -xzf - --strip-components=1 -C /tmp/onnxruntime-genai
+          # Copy GenAI libraries to the onnxruntime lib directory
+          cp /tmp/onnxruntime-genai/lib/libonnxruntime-genai*.so* /tmp/onnxruntime/lib/ 2>/dev/null || true
+          echo "ORTGENAI_DYLIB_PATH=/tmp/onnxruntime/lib/libonnxruntime-genai.so" >> $GITHUB_ENV
 
       - name: Download dependencies
         run: |

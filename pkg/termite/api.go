@@ -19,6 +19,9 @@ package termite
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,6 +32,7 @@ import (
 	"github.com/antflydb/antfly-go/libaf/embeddings"
 	"github.com/antflydb/antfly-go/libaf/s3"
 	"github.com/antflydb/antfly-go/libaf/scraping"
+	"github.com/antflydb/termite/pkg/termite/lib/generation"
 	"github.com/antflydb/termite/pkg/termite/lib/ner"
 	"github.com/bytedance/sonic/decoder"
 	"github.com/bytedance/sonic/encoder"
@@ -70,25 +74,31 @@ func (t *TermiteAPI) RerankPrompts(w http.ResponseWriter, r *http.Request) {
 	t.node.handleApiRerank(w, r)
 }
 
-// RecognizeEntities implements ServerInterface
-func (t *TermiteAPI) RecognizeEntities(w http.ResponseWriter, r *http.Request) {
-	t.node.handleApiNER(w, r)
+// GenerateContent implements ServerInterface
+func (t *TermiteAPI) GenerateContent(w http.ResponseWriter, r *http.Request) {
+	t.node.handleApiGenerate(w, r)
 }
 
-// GenerateQuestions implements ServerInterface
-func (t *TermiteAPI) GenerateQuestions(w http.ResponseWriter, r *http.Request) {
-	t.node.handleApiGenerate(w, r)
+// RecognizeEntities implements ServerInterface
+func (t *TermiteAPI) RecognizeEntities(w http.ResponseWriter, r *http.Request) {
+	t.node.handleApiRecognize(w, r)
+}
+
+// RewriteText implements ServerInterface
+func (t *TermiteAPI) RewriteText(w http.ResponseWriter, r *http.Request) {
+	t.node.handleApiRewrite(w, r)
 }
 
 // ListModels implements ServerInterface
 func (t *TermiteAPI) ListModels(w http.ResponseWriter, r *http.Request) {
 	resp := ModelsResponse{
-		Chunkers:      []string{},
-		Rerankers:     []string{},
-		Embedders:     []string{},
-		Recognizers:   []string{},
-		Extractors:    []string{},
-		Questionators: []string{},
+		Chunkers:    []string{},
+		Rerankers:   []string{},
+		Embedders:   []string{},
+		Generators:  []string{},
+		Recognizers: []string{},
+		Extractors:  []string{},
+		Rewriters:   []string{},
 	}
 
 	if t.node.cachedChunker != nil {
@@ -103,13 +113,32 @@ func (t *TermiteAPI) ListModels(w http.ResponseWriter, r *http.Request) {
 		resp.Rerankers = t.node.rerankerRegistry.List()
 	}
 
+	if t.node.generatorRegistry != nil {
+		resp.Generators = t.node.generatorRegistry.List()
+	}
+
 	if t.node.nerRegistry != nil {
 		resp.Recognizers = t.node.nerRegistry.List()
 		resp.Extractors = t.node.nerRegistry.ListRecognizers()
+		// Populate recognizer info with capabilities
+		capsMap := t.node.nerRegistry.ListWithCapabilities()
+		if len(capsMap) > 0 {
+			resp.RecognizerInfo = make(map[string]RecognizerModelInfo, len(capsMap))
+			for name, caps := range capsMap {
+				// Convert string capabilities to RecognizerCapability enum
+				enumCaps := make([]RecognizerCapability, len(caps))
+				for i, c := range caps {
+					enumCaps[i] = RecognizerCapability(c)
+				}
+				resp.RecognizerInfo[name] = RecognizerModelInfo{
+					Capabilities: enumCaps,
+				}
+			}
+		}
 	}
 
 	if t.node.seq2seqRegistry != nil {
-		resp.Questionators = t.node.seq2seqRegistry.List()
+		resp.Rewriters = t.node.seq2seqRegistry.List()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -540,8 +569,8 @@ func (ln *TermiteNode) handleApiRerank(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleApiNER handles NER (Named Entity Recognition) requests
-func (ln *TermiteNode) handleApiNER(w http.ResponseWriter, r *http.Request) {
+// handleApiRecognize handles NER (Named Entity Recognition) requests
+func (ln *TermiteNode) handleApiRecognize(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = r.Body.Close() }()
 
 	// Check if NER is available
@@ -678,13 +707,313 @@ func (ln *TermiteNode) handleApiNER(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleApiGenerate handles Seq2Seq text generation requests
+// generateCompletionID generates a unique ID like OpenAI's "chatcmpl-xxx" format
+func generateCompletionID() string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	return "chatcmpl-" + hex.EncodeToString(b)
+}
+
+// handleApiGenerate handles text generation requests using LLM models (OpenAI-compatible)
 func (ln *TermiteNode) handleApiGenerate(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = r.Body.Close() }()
 
 	// Check if generation is available
-	if ln.seq2seqRegistry == nil || len(ln.seq2seqRegistry.List()) == 0 {
+	if ln.generatorRegistry == nil || len(ln.generatorRegistry.List()) == 0 {
 		http.Error(w, "generation not available: no models configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Apply backpressure via request queue
+	release, err := ln.requestQueue.Acquire(r.Context())
+	if err != nil {
+		switch err {
+		case ErrQueueFull:
+			RecordQueueRejection()
+			WriteQueueFullResponse(w, 5*time.Second)
+		case ErrRequestTimeout:
+			RecordQueueTimeout()
+			WriteTimeoutResponse(w)
+		default:
+			http.Error(w, "request cancelled", http.StatusRequestTimeout)
+		}
+		return
+	}
+	defer release()
+
+	// Update queue metrics
+	UpdateQueueMetrics(ln.requestQueue.Stats())
+
+	// Decode request
+	var req GenerateRequest
+	if err := decoder.NewStreamDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, fmt.Sprintf("decoding request: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Validate request
+	if req.Model == "" {
+		http.Error(w, "model is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Messages) == 0 {
+		http.Error(w, "messages are required", http.StatusBadRequest)
+		return
+	}
+
+	// Get generator from registry
+	generator, err := ln.generatorRegistry.Get(req.Model)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("model not found: %s", req.Model), http.StatusNotFound)
+		return
+	}
+
+	// Convert messages to internal format
+	messages := make([]generation.Message, len(req.Messages))
+	for i, m := range req.Messages {
+		messages[i] = generation.Message{
+			Role:    string(m.Role),
+			Content: m.Content,
+		}
+	}
+
+	// Set options from request, using defaults for zero values
+	opts := generation.GenerateOptions{
+		MaxTokens:   256,
+		Temperature: 1.0,
+		TopP:        1.0,
+		TopK:        50,
+	}
+	if req.MaxTokens > 0 {
+		opts.MaxTokens = req.MaxTokens
+	}
+	if req.Temperature > 0 {
+		opts.Temperature = req.Temperature
+	}
+	if req.TopP > 0 {
+		opts.TopP = req.TopP
+	}
+	if req.TopK > 0 {
+		opts.TopK = req.TopK
+	}
+
+	// Generate completion ID and timestamp
+	completionID := generateCompletionID()
+	created := int(time.Now().Unix())
+
+	// Handle streaming vs non-streaming
+	if req.Stream {
+		ln.handleStreamingGenerate(w, r, req, generator, messages, opts, completionID, created)
+		return
+	}
+
+	// Non-streaming: Generate text
+	result, err := generator.Generate(r.Context(), messages, opts)
+	if err != nil {
+		ln.logger.Error("generation failed",
+			zap.String("model", req.Model),
+			zap.Int("num_messages", len(req.Messages)),
+			zap.Error(err))
+		http.Error(w, fmt.Sprintf("generation failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Record metrics
+	RecordGeneratorRequest(req.Model)
+	RecordTokenGeneration(req.Model, result.TokensUsed)
+
+	ln.logger.Info("generation request completed",
+		zap.String("model", req.Model),
+		zap.Int("num_messages", len(req.Messages)),
+		zap.Int("tokens_generated", result.TokensUsed))
+
+	// Map finish reason
+	var finishReason FinishReason
+	switch result.FinishReason {
+	case "length":
+		finishReason = FinishReasonLength
+	default:
+		finishReason = FinishReasonStop
+	}
+
+	// Estimate prompt tokens (rough estimate based on message content length)
+	// TODO: Use actual tokenizer for accurate count
+	promptTokens := 0
+	for _, m := range req.Messages {
+		promptTokens += len(m.Content) / 4 // Rough estimate: ~4 chars per token
+	}
+
+	// Build OpenAI-compatible response
+	resp := GenerateResponse{
+		Id:      completionID,
+		Object:  GenerateResponseObjectChatCompletion,
+		Created: created,
+		Model:   req.Model,
+		Choices: []GenerateChoice{
+			{
+				Index: 0,
+				Message: GenerateMessage{
+					Role:    RoleAssistant,
+					Content: result.Text,
+				},
+				FinishReason: finishReason,
+				Logprobs:     nil,
+			},
+		},
+		Usage: GenerateUsage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: result.TokensUsed,
+			TotalTokens:      promptTokens + result.TokensUsed,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := encoder.NewStreamEncoder(w).Encode(resp); err != nil {
+		ln.logger.Error("encoding response", zap.Error(err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleStreamingGenerate handles streaming generation with SSE
+func (ln *TermiteNode) handleStreamingGenerate(
+	w http.ResponseWriter,
+	r *http.Request,
+	req GenerateRequest,
+	generator generation.Generator,
+	messages []generation.Message,
+	opts generation.GenerateOptions,
+	completionID string,
+	created int,
+) {
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Type-assert to StreamingGenerator for true token-by-token streaming
+	streamingGen, ok := generator.(generation.StreamingGenerator)
+	if !ok {
+		ln.logger.Error("generator does not support streaming",
+			zap.String("model", req.Model))
+		fmt.Fprintf(w, "data: {\"error\": \"generator does not support streaming\"}\n\n")
+		flusher.Flush()
+		return
+	}
+
+	// Start streaming generation
+	tokenChan, errChan, err := streamingGen.GenerateStream(r.Context(), messages, opts)
+	if err != nil {
+		ln.logger.Error("failed to start streaming generation",
+			zap.String("model", req.Model),
+			zap.Error(err))
+		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())
+		flusher.Flush()
+		return
+	}
+
+	// Send first chunk with role
+	firstChunk := GenerateChunk{
+		Id:      completionID,
+		Object:  GenerateChunkObjectChatCompletionChunk,
+		Created: created,
+		Model:   req.Model,
+		Choices: []GenerateChunkChoice{
+			{
+				Index: 0,
+				Delta: GenerateDelta{
+					Role: RoleAssistant,
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(firstChunk)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+
+	// Stream tokens as they arrive
+	var tokenCount int
+	for token := range tokenChan {
+		tokenCount++
+
+		chunk := GenerateChunk{
+			Id:      completionID,
+			Object:  GenerateChunkObjectChatCompletionChunk,
+			Created: created,
+			Model:   req.Model,
+			Choices: []GenerateChunkChoice{
+				{
+					Index: 0,
+					Delta: GenerateDelta{
+						Content: token.Token,
+					},
+				},
+			},
+		}
+		data, _ := json.Marshal(chunk)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	// Check for errors from the error channel
+	select {
+	case err := <-errChan:
+		if err != nil {
+			ln.logger.Error("streaming generation error",
+				zap.String("model", req.Model),
+				zap.Error(err))
+			fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())
+			flusher.Flush()
+			return
+		}
+	default:
+	}
+
+	// Record metrics
+	RecordGeneratorRequest(req.Model)
+	RecordTokenGeneration(req.Model, tokenCount)
+
+	// Send final chunk with finish_reason
+	finalChunk := GenerateChunk{
+		Id:      completionID,
+		Object:  GenerateChunkObjectChatCompletionChunk,
+		Created: created,
+		Model:   req.Model,
+		Choices: []GenerateChunkChoice{
+			{
+				Index:        0,
+				Delta:        GenerateDelta{},
+				FinishReason: FinishReasonStop,
+			},
+		},
+	}
+	data, _ = json.Marshal(finalChunk)
+	fmt.Fprintf(w, "data: %s\n\n", data)
+	flusher.Flush()
+
+	// Send [DONE] signal
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+
+	ln.logger.Info("streaming generation completed",
+		zap.String("model", req.Model),
+		zap.Int("tokens_generated", tokenCount))
+}
+
+// handleApiRewrite handles Seq2Seq text rewriting requests
+func (ln *TermiteNode) handleApiRewrite(w http.ResponseWriter, r *http.Request) {
+	defer func() { _ = r.Body.Close() }()
+
+	// Check if rewriting is available
+	if ln.seq2seqRegistry == nil || len(ln.seq2seqRegistry.List()) == 0 {
+		http.Error(w, "rewriting not available: no models configured", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -711,7 +1040,7 @@ func (ln *TermiteNode) handleApiGenerate(w http.ResponseWriter, r *http.Request)
 	// Decode request
 	var req struct {
 		Model  string   `json:"model"`  // Model name to use (required)
-		Inputs []string `json:"inputs"` // Input texts to generate from
+		Inputs []string `json:"inputs"` // Input texts to rewrite
 	}
 	if err := decoder.NewStreamDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -738,21 +1067,21 @@ func (ln *TermiteNode) handleApiGenerate(w http.ResponseWriter, r *http.Request)
 	// Generate text
 	output, err := model.Generate(r.Context(), req.Inputs)
 	if err != nil {
-		ln.logger.Error("generation failed",
+		ln.logger.Error("rewriting failed",
 			zap.String("model", req.Model),
 			zap.Int("num_inputs", len(req.Inputs)),
 			zap.Error(err))
-		http.Error(w, fmt.Sprintf("generation failed: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("rewriting failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	ln.logger.Info("generation request completed",
+	ln.logger.Info("rewrite request completed",
 		zap.String("model", req.Model),
 		zap.Int("num_inputs", len(req.Inputs)),
 		zap.Int("num_outputs", len(output.Texts)))
 
 	// Send response
-	resp := QuestionGenerateResponse{
+	resp := RewriteResponse{
 		Model: req.Model,
 		Texts: output.Texts,
 	}

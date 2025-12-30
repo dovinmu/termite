@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 #
-# Download ONNX Runtime and libtokenizers libraries for cross-compilation
+# Download ONNX Runtime, ONNX Runtime GenAI, and libtokenizers libraries for cross-compilation
 #
 # This script downloads pre-built libraries for all supported target platforms.
 # These are required for building with ONNX support (CGO enabled).
 #
 # Downloads:
-#   - ONNX Runtime C/C++ libraries from Microsoft
+#   - ONNX Runtime C/C++ libraries from Microsoft (for embeddings, NER, reranking)
+#   - ONNX Runtime GenAI libraries from Microsoft (for LLM text generation)
 #   - libtokenizers.a from knights-analytics/hugot (linux-amd64) or daulet/tokenizers (other platforms)
 #
 # Usage:
-#   ./scripts/download-onnxruntime.sh [ONNXRUNTIME_VERSION]
+#   ./scripts/download-onnxruntime.sh [ONNXRUNTIME_VERSION] [GENAI_VERSION]
 #
 # Example:
-#   ./scripts/download-onnxruntime.sh 1.23.2
+#   ./scripts/download-onnxruntime.sh 1.23.2 0.11.4
 #
 # The libraries will be downloaded to ./onnxruntime/<platform>/
 # Set ONNXRUNTIME_ROOT environment variable to this directory when building.
@@ -22,11 +23,13 @@ set -euo pipefail
 
 # Default versions - update these when upgrading dependencies
 ONNXRUNTIME_VERSION="${1:-1.23.2}"
+GENAI_VERSION="${2:-0.11.4}"
 HUGOT_VERSION="${HUGOT_VERSION:-0.5.8}"
 TOKENIZERS_VERSION="${TOKENIZERS_VERSION:-1.24.0}"
 
 # Base URLs
 ONNXRUNTIME_BASE_URL="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}"
+GENAI_BASE_URL="https://github.com/microsoft/onnxruntime-genai/releases/download/v${GENAI_VERSION}"
 HUGOT_BASE_URL="https://github.com/knights-analytics/hugot/releases/download/v${HUGOT_VERSION}"
 TOKENIZERS_BASE_URL="https://github.com/daulet/tokenizers/releases/download/v${TOKENIZERS_VERSION}"
 
@@ -55,6 +58,25 @@ get_tokenizers_platform() {
         darwin-amd64) echo "darwin-x86_64" ;;
         darwin-arm64) echo "darwin-arm64" ;;
         *) echo "" ;;
+    esac
+}
+
+# Platform mappings: our naming -> ONNX Runtime GenAI naming
+get_genai_platform() {
+    case "$1" in
+        linux-amd64) echo "linux-x64" ;;
+        linux-arm64) echo "linux-arm64" ;;
+        darwin-amd64) echo "osx-x64" ;;
+        darwin-arm64) echo "osx-arm64" ;;
+        *) echo "" ;;
+    esac
+}
+
+# Get library extension for platform
+get_lib_extension() {
+    case "$1" in
+        darwin-*) echo "dylib" ;;
+        *) echo "so" ;;
     esac
 }
 
@@ -145,6 +167,77 @@ download_onnxruntime() {
     return 0
 }
 
+# Download and extract ONNX Runtime GenAI for a specific platform (for LLM generation)
+download_genai() {
+    local our_platform="$1"
+    local genai_platform=$(get_genai_platform "$our_platform")
+    local lib_ext=$(get_lib_extension "$our_platform")
+    local archive_name="onnxruntime-genai-${GENAI_VERSION}-${genai_platform}.tar.gz"
+    local url="${GENAI_BASE_URL}/${archive_name}"
+    local output_path="${OUTPUT_DIR}/${our_platform}"
+    local temp_dir
+
+    # GenAI is optional - skip if platform not supported
+    if [[ -z "$genai_platform" ]]; then
+        warn "ONNX Runtime GenAI not available for ${our_platform}"
+        return 1
+    fi
+
+    info "Downloading ONNX Runtime GenAI ${GENAI_VERSION} for ${our_platform}..."
+
+    # Create output directory
+    mkdir -p "${output_path}/lib"
+
+    # Create temp directory for download
+    temp_dir=$(mktemp -d)
+    trap "rm -rf ${temp_dir}" EXIT
+
+    # Download archive
+    if ! curl -fsSL --retry 3 --retry-delay 2 -o "${temp_dir}/${archive_name}" "${url}"; then
+        warn "Failed to download ${archive_name} - GenAI may not be available for this platform"
+        trap - EXIT
+        rm -rf "${temp_dir}"
+        return 1
+    fi
+
+    # Extract archive
+    info "Extracting ${archive_name}..."
+    tar -xzf "${temp_dir}/${archive_name}" -C "${temp_dir}"
+
+    # Find and copy the GenAI libraries
+    # GenAI archives typically extract to onnxruntime-genai-<version>-<platform>/lib/
+    local extracted_dir
+    extracted_dir=$(find "${temp_dir}" -maxdepth 1 -type d -name "onnxruntime-genai*" | head -1)
+
+    if [[ -n "${extracted_dir}" && -d "${extracted_dir}/lib" ]]; then
+        # Copy all GenAI libraries
+        cp -r "${extracted_dir}"/lib/libonnxruntime-genai*.${lib_ext}* "${output_path}/lib/" 2>/dev/null || true
+
+        # Also copy any bundled onnxruntime library if present (GenAI often includes it)
+        cp -r "${extracted_dir}"/lib/libonnxruntime*.${lib_ext}* "${output_path}/lib/" 2>/dev/null || true
+
+        info "Successfully installed ONNX Runtime GenAI for ${our_platform}"
+    else
+        # Try alternative structure
+        local found_lib=$(find "${temp_dir}" -name "libonnxruntime-genai*.${lib_ext}*" -type f | head -1)
+        if [[ -n "$found_lib" ]]; then
+            cp "$(dirname "$found_lib")"/libonnxruntime-genai*.${lib_ext}* "${output_path}/lib/" 2>/dev/null || true
+            cp "$(dirname "$found_lib")"/libonnxruntime*.${lib_ext}* "${output_path}/lib/" 2>/dev/null || true
+            info "Successfully installed ONNX Runtime GenAI for ${our_platform}"
+        else
+            warn "Could not find GenAI libraries in archive for ${our_platform}"
+            ls -laR "${temp_dir}"
+            trap - EXIT
+            rm -rf "${temp_dir}"
+            return 1
+        fi
+    fi
+
+    trap - EXIT
+    rm -rf "${temp_dir}"
+    return 0
+}
+
 # Download libtokenizers.a for a specific platform
 download_tokenizers() {
     local our_platform="$1"
@@ -218,16 +311,22 @@ download_tokenizers() {
 download_platform() {
     local platform="$1"
     local onnx_ok=0
+    local genai_ok=0
     local tokenizers_ok=0
 
     if download_onnxruntime "${platform}"; then
         onnx_ok=1
     fi
 
+    if download_genai "${platform}"; then
+        genai_ok=1
+    fi
+
     if download_tokenizers "${platform}"; then
         tokenizers_ok=1
     fi
 
+    # Core libraries (ONNX + tokenizers) are required, GenAI is optional
     if [[ $onnx_ok -eq 1 && $tokenizers_ok -eq 1 ]]; then
         return 0
     else

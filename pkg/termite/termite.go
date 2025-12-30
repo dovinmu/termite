@@ -52,6 +52,7 @@ type TermiteNode struct {
 
 	cachedChunker         *CachedChunker
 	rerankerRegistry      *RerankerRegistry
+	generatorRegistry     *GeneratorRegistry
 	nerRegistry           *NERRegistry
 	seq2seqRegistry       *Seq2SeqRegistry
 	contentSecurityConfig *scraping.ContentSecurityConfig
@@ -144,11 +145,12 @@ func RunAsTermite(ctx context.Context, zl *zap.Logger, config Config, readyC cha
 	}
 
 	// Compute model subdirectory paths from models_dir
-	var embedderModelsDir, chunkerModelsDir, rerankerModelsDir string
+	var embedderModelsDir, chunkerModelsDir, rerankerModelsDir, generatorModelsDir string
 	if config.ModelsDir != "" {
 		embedderModelsDir = filepath.Join(config.ModelsDir, "embedders")
 		chunkerModelsDir = filepath.Join(config.ModelsDir, "chunkers")
 		rerankerModelsDir = filepath.Join(config.ModelsDir, "rerankers")
+		generatorModelsDir = filepath.Join(config.ModelsDir, "generators")
 	}
 
 	// Create session manager for multi-backend support
@@ -259,6 +261,17 @@ func RunAsTermite(ctx context.Context, zl *zap.Logger, config Config, readyC cha
 		defer func() { _ = rerankerRegistry.Close() }()
 	}
 
+	// Initialize generator registry with optional model directory support
+	// If models_dir is set in config, Termite will discover and load generator (LLM) models
+	// If not set, generation endpoint will not be available
+	generatorRegistry, err := NewGeneratorRegistry(generatorModelsDir, sessionManager, zl.Named("generator"))
+	if err != nil {
+		zl.Fatal("Failed to initialize generator registry", zap.Error(err))
+	}
+	if generatorRegistry != nil {
+		defer func() { _ = generatorRegistry.Close() }()
+	}
+
 	// Initialize NER registry with optional model directory support
 	// If models_dir is set in config, Termite will discover and load NER models
 	// If not set, NER endpoint will not be available
@@ -279,7 +292,7 @@ func RunAsTermite(ctx context.Context, zl *zap.Logger, config Config, readyC cha
 	// If not set, generate endpoint will not be available
 	var generatorsModelsDir string
 	if config.ModelsDir != "" {
-		generatorsModelsDir = filepath.Join(config.ModelsDir, "questionators")
+		generatorsModelsDir = filepath.Join(config.ModelsDir, "rewriters")
 	}
 	seq2seqRegistry, err := NewSeq2SeqRegistry(generatorsModelsDir, sessionManager, zl.Named("seq2seq"))
 	if err != nil {
@@ -352,6 +365,7 @@ func RunAsTermite(ctx context.Context, zl *zap.Logger, config Config, readyC cha
 		lazyEmbedderRegistry:  lazyEmbedderRegistry,
 		cachedChunker:         cachedChunker,
 		rerankerRegistry:      rerankerRegistry,
+		generatorRegistry:     generatorRegistry,
 		nerRegistry:           nerRegistry,
 		seq2seqRegistry:       seq2seqRegistry,
 		contentSecurityConfig: contentSecurityConfig,
@@ -373,6 +387,9 @@ func RunAsTermite(ctx context.Context, zl *zap.Logger, config Config, readyC cha
 	// Health endpoints (outside /api prefix for k8s compatibility)
 	rootMux.HandleFunc("GET /healthz", node.handleHealthz)
 	rootMux.HandleFunc("GET /readyz", node.handleReadyz)
+
+	// Generate endpoint (manually registered until OpenAPI codegen is updated)
+	rootMux.HandleFunc("POST /api/generate", node.handleApiGenerate)
 
 	// Mount the OpenAPI-generated API handler (includes /api/version)
 	rootMux.Handle("/api/", apiHandler)

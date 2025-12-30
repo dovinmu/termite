@@ -74,6 +74,24 @@ var (
 		[]string{"model"},
 	)
 
+	generatorRequestOps = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "antfly",
+			Subsystem: "termite",
+			Name:      "generator_request_ops_total",
+			Help:      "The total number of generator (LLM) requests.",
+		},
+		[]string{"model"},
+	)
+	tokenGenerationOps = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "antfly",
+			Subsystem: "termite",
+			Name:      "token_generation_ops_total",
+			Help:      "The total number of tokens generated.",
+		},
+		[]string{"model"},
+	)
 	nerRequestOps = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "antfly",
@@ -190,6 +208,8 @@ func init() {
 	prometheus.MustRegister(rerankingCreationOps)
 	prometheus.MustRegister(chunkerRequestOps)
 	prometheus.MustRegister(chunkCreationOps)
+	prometheus.MustRegister(generatorRequestOps)
+	prometheus.MustRegister(tokenGenerationOps)
 	prometheus.MustRegister(nerRequestOps)
 	prometheus.MustRegister(nerCreationOps)
 	prometheus.MustRegister(modelLoadDuration)
@@ -262,6 +282,16 @@ func RecordChunkerRequest(model string) {
 // RecordChunkCreation records the number of chunks created
 func RecordChunkCreation(model string, count int) {
 	chunkCreationOps.WithLabelValues(model).Add(float64(count))
+}
+
+// RecordGeneratorRequest increments the generator request counter
+func RecordGeneratorRequest(model string) {
+	generatorRequestOps.WithLabelValues(model).Inc()
+}
+
+// RecordTokenGeneration records the number of tokens generated
+func RecordTokenGeneration(model string, count int) {
+	tokenGenerationOps.WithLabelValues(model).Add(float64(count))
 }
 
 // RecordNERRequest increments the NER request counter
