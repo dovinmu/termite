@@ -3,4 +3,6 @@
 /libtokenizers.a
 /onnxruntime
 /pjrt
-/registry
+# Registry - track manifests/index, ignore large binaries
+/registry/blobs/
+/registry/models/

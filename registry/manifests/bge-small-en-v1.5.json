@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "name": "bge-small-en-v1.5",
+  "type": "embedder",
+  "description": "",
+  "source": "BAAI/bge-small-en-v1.5",
+  "files": [
+    {
+      "name": "model.onnx",
+      "digest": "sha256:6486a4254340e367583958292847e92742e70bfc3acdab80e4a72fac26eddbfb",
+      "size": 133041944
+    },
+    {
+      "name": "tokenizer.json",
+      "digest": "sha256:d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+      "size": 711396
+    },
+    {
+      "name": "config.json",
+      "digest": "sha256:e842b4876b31989677d9cf9ba95fab6de09876a5a60915c6877501c746ac95d6",
+      "size": 661
+    },
+    {
+      "name": "tokenizer_config.json",
+      "digest": "sha256:7b082b48a08a0b5c5939d99472e33addce3d96202155e33f7928cecd171186a0",
+      "size": 1272
+    },
+    {
+      "name": "special_tokens_map.json",
+      "digest": "sha256:5d5b662e421ea9fac075174bb0688ee0d9431699900b90662acd44b2a350503a",
+      "size": 695
+    },
+    {
+      "name": "vocab.txt",
+      "digest": "sha256:07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3",
+      "size": 231508
+    }
+  ],
+  "variants": {
+    "f16": {
+      "name": "model_f16.onnx",
+      "digest": "sha256:4518acd91a073a30ca5f32e96bf8020034992cb9ffd52bd9ff6da89f1f5675ab",
+      "size": 66694927
+    },
+    "i8": {
+      "name": "model_i8.onnx",
+      "digest": "sha256:871ab4e755d9ab0eb8a7f7a965136e24f08b1ac26303c6e55c122be3a2c04172",
+      "size": 33792561
+    }
+  }
+}

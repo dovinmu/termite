@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "models": [
+    {
+      "name": "bge-small-en-v1.5",
+      "type": "embedder",
+      "description": "",
+      "source": "BAAI/bge-small-en-v1.5",
+      "size": 133987476,
+      "variants": [
+        "f16",
+        "i8"
+      ]
+    },
+    {
+      "name": "chonky-mmbert-small-multilingual-1",
+      "type": "chunker",
+      "description": "",
+      "source": "mirth/chonky_mmbert_small_multilingual_1",
+      "size": 597479152,
+      "variants": [
+        "f16",
+        "i8"
+      ]
+    },
+    {
+      "name": "clip-vit-base-patch32",
+      "type": "embedder",
+      "description": "",
+      "source": "openai/clip-vit-base-patch32",
+      "size": 612032340,
+      "variants": [
+        "f16",
+        "i8"
+      ],
+      "capabilities": [
+        "multimodal"
+      ],
+      "backends": [
+        "onnx"
+      ]
+    },
+    {
+      "name": "flan-t5-small-squad-qg",
+      "type": "rewriter",
+      "description": "",
+      "source": "lmqg/flan-t5-small-squad-qg",
+      "size": 596964706,
+      "variants": []
+    },
+    {
+      "name": "mxbai-rerank-base-v1",
+      "type": "reranker",
+      "description": "",
+      "source": "mixedbread-ai/mxbai-rerank-base-v1",
+      "size": 747254415,
+      "variants": [
+        "f16",
+        "i8"
+      ]
+    },
+    {
+      "name": "rebel-large",
+      "type": "recognizer",
+      "description": "",
+      "source": "Babelscape/rebel-large",
+      "size": 3163580492,
+      "variants": [],
+      "capabilities": [
+        "relations"
+      ]
+    }
+  ]
+}

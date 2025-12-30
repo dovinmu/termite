@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "name": "chonky-mmbert-small-multilingual-1",
+  "type": "chunker",
+  "description": "",
+  "source": "mirth/chonky_mmbert_small_multilingual_1",
+  "files": [
+    {
+      "name": "model.onnx",
+      "digest": "sha256:4369320b5068edfe312dbb0ae90664218e5637062a30df2509bf0dabd96ad1b3",
+      "size": 563067112
+    },
+    {
+      "name": "tokenizer.json",
+      "digest": "sha256:609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f",
+      "size": 34363188
+    },
+    {
+      "name": "config.json",
+      "digest": "sha256:61a08592adb2cd42c9f5f65edbd0993cb515f903f68d9b7ff2a8f0e6336a827c",
+      "size": 1332
+    },
+    {
+      "name": "tokenizer_config.json",
+      "digest": "sha256:3b66ca84514d9aacf4b90c65a61e561127c6c21d81bbf4e8ba9d46a4c15ac82d",
+      "size": 46469
+    },
+    {
+      "name": "special_tokens_map.json",
+      "digest": "sha256:6e3204c5a4004719c185007a745d1940471a6fb02521cfa0a00306dbb6bc5903",
+      "size": 1051
+    }
+  ],
+  "variants": {
+    "f16": {
+      "name": "model_f16.onnx",
+      "digest": "sha256:9a57dca0637899b3c8f66ed5be5f97bbb4ae732a80f8e4c781a258579a250449",
+      "size": 281945800
+    },
+    "i8": {
+      "name": "model_i8.onnx",
+      "digest": "sha256:de9fd6bbeff60d00b600def5c773db6fe8ef3f71fba2ea40a0765343ebf8bf18",
+      "size": 141554297
+    }
+  }
+}

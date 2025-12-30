@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "name": "clip-vit-base-patch32",
+  "type": "embedder",
+  "description": "",
+  "source": "openai/clip-vit-base-patch32",
+  "capabilities": ["multimodal"],
+  "backends": ["onnx"],
+  "files": [
+    {
+      "name": "visual_model.onnx",
+      "digest": "sha256:f070c297c8d215ae2c84c202c3bfdb179ef33ea91331d16a834ab620127a2570",
+      "size": 1159347
+    },
+    {
+      "name": "visual_model.onnx.data",
+      "digest": "sha256:04ada8fe1125ce75c4629e0eaf047ec7ea0e5f43e2a518e52ba5343cea8c41c4",
+      "size": 349831168
+    },
+    {
+      "name": "text_model.onnx",
+      "digest": "sha256:eaf06c967495d86d3c5e8b7e0418eefd015118599046bc43978f68236e35da44",
+      "size": 1204924
+    },
+    {
+      "name": "text_model.onnx.data",
+      "digest": "sha256:1da1df9bcae44e6b6450fa88ca6a21af8c19735fbba2f31834ae805a41d3a125",
+      "size": 252706816
+    },
+    {
+      "name": "visual_projection.onnx",
+      "digest": "sha256:0ca7709d9f30e5f58e24845aea28777a1cde98c8942bea61ac59478f2ff3a3ed",
+      "size": 326
+    },
+    {
+      "name": "visual_projection.onnx.data",
+      "digest": "sha256:13295d3b6f85989c124f39c5c1581c9f6a1c0d393ea151402f757987d4327419",
+      "size": 1572864
+    },
+    {
+      "name": "text_projection.onnx",
+      "digest": "sha256:3232f72a79ab16f889944a57760dcaede2bfe98db15b651cfeac14a72c2dec7d",
+      "size": 324
+    },
+    {
+      "name": "text_projection.onnx.data",
+      "digest": "sha256:478d41294224ac5b677b45e1d5ff60b5c05cddb1c09227e8b5166ce1cb30fd51",
+      "size": 1048576
+    },
+    {
+      "name": "tokenizer.json",
+      "digest": "sha256:8e019f9349caf5f9bb92514b0e4fc00c92841aef6ae8df9d833d975c623b7c72",
+      "size": 3642348
+    },
+    {
+      "name": "config.json",
+      "digest": "sha256:f8c3c40c52f88bc9907ef3dfd6ddbf1099a55fb4b0c7132d619a237d9f14e516",
+      "size": 1210
+    },
+    {
+      "name": "clip_config.json",
+      "digest": "sha256:f279ffd08fd4aeb33871eb72265a8206bd21fd883a75c7bdfa9d90f248c7367a",
+      "size": 281
+    },
+    {
+      "name": "preprocessor_config.json",
+      "digest": "sha256:8fb547403656e9019b0982d2310b045bef39b9d2a811a0c98756e52d48e25db6",
+      "size": 504
+    },
+    {
+      "name": "tokenizer_config.json",
+      "digest": "sha256:39bae5313c2da6467866dee758e754d69f0e302a875027b142531cb9c51c7c28",
+      "size": 736
+    },
+    {
+      "name": "special_tokens_map.json",
+      "digest": "sha256:2cdb3b8331a60c92fc1e55a13e9fd61fd2293c5a51275fdcccd62b780052530e",
+      "size": 588
+    },
+    {
+      "name": "vocab.json",
+      "digest": "sha256:5047b556ce86ccaf6aa22b3ffccfc52d391ea4accdab9c2f2407da5b742d4363",
+      "size": 862328
+    }
+  ],
+  "variants": {
+    "f16": [
+      {
+        "name": "visual_model_f16.onnx",
+        "digest": "sha256:2209bc8569962ad154d56941c517bd4d41c4077cae5d13a45337f80e062a3623",
+        "size": 176062080
+      },
+      {
+        "name": "text_model_f16.onnx",
+        "digest": "sha256:2174dbb3f9c20be0203f47c800967fe0746fee2d4b055f03fb506418c33f4664",
+        "size": 127527655
+      }
+    ],
+    "i8": [
+      {
+        "name": "visual_model_i8.onnx",
+        "digest": "sha256:bbbb27a15870e0e5faaf2cd05b7dd8faba036b49f6386c01bf0aaa0cba4a3e47",
+        "size": 88856463
+      },
+      {
+        "name": "text_model_i8.onnx",
+        "digest": "sha256:d976f193894c1836eed86ee3e69a20310d781501cf02ccf9931ea6f109c2b468",
+        "size": 64484563
+      }
+    ]
+  }
+}
