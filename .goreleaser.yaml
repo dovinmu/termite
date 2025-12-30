@@ -293,6 +293,11 @@ archives:
       - src: "onnxruntime/{{ .Os }}-{{ .Arch }}/lib/libonnxruntime*"
         dst: lib/
         strip_parent: true
+      # Bundle ONNX Runtime GenAI libraries (for LLM generation)
+      # Note: Not available for linux-arm64, glob silently skips if no match
+      - src: "onnxruntime/{{ .Os }}-{{ .Arch }}/lib/libonnxruntime-genai*"
+        dst: lib/
+        strip_parent: true
 
   # OMNI builds (ONNX + XLA) with runtime backend selection
   # Includes bundled ONNX Runtime and PJRT libraries
@@ -314,6 +319,11 @@ archives:
       - LICENSE
       # Bundle ONNX Runtime libraries for each platform
       - src: "onnxruntime/{{ .Os }}-{{ .Arch }}/lib/libonnxruntime*"
+        dst: lib/
+        strip_parent: true
+      # Bundle ONNX Runtime GenAI libraries (for LLM generation)
+      # Note: Not available for linux-arm64, glob silently skips if no match
+      - src: "onnxruntime/{{ .Os }}-{{ .Arch }}/lib/libonnxruntime-genai*"
         dst: lib/
         strip_parent: true
       # Bundle PJRT CPU plugin for XLA backend
