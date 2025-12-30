@@ -12,7 +12,7 @@ info:
     - **Text Chunking**: Semantic chunking with ONNX models or fixed-size fallback
     - **Reranking**: Relevance re-scoring for search results
     - **Named Entity Recognition**: Extract persons, organizations, locations from text
-    - **Question Generation**: Generate questions from text using Seq2Seq models
+    - **Text Rewriting**: Transform text using Seq2Seq models (question generation, query generation, etc.)
 
     Download the latest release at https://antfly.io/docs/downloads
 
@@ -392,8 +392,8 @@ components:
               $ref: "#/components/schemas/RecognizeEntity"
           description: Array of entity arrays (one per input text)
 
-    # Questionator Types (Seq2Seq)
-    QuestionGenerateRequest:
+    # Rewriter Types (Seq2Seq)
+    RewriteRequest:
       type: object
       required:
         - model
@@ -401,16 +401,16 @@ components:
       properties:
         model:
           type: string
-          description: Name of Seq2Seq questionator model from models_dir/questionators/
+          description: Name of Seq2Seq rewriter model from models_dir/rewriters/
           example: "flan-t5-small"
         inputs:
           type: array
           items:
             type: string
-          description: Input texts to generate from
+          description: Input texts to rewrite/transform
           example: ["Translate to German: Hello, how are you?"]
 
-    QuestionGenerateResponse:
+    RewriteResponse:
       type: object
       required:
         - model
@@ -418,14 +418,14 @@ components:
       properties:
         model:
           type: string
-          description: Name of model used for generation
+          description: Name of model used for rewriting
         texts:
           type: array
           items:
             type: array
             items:
               type: string
-          description: Generated texts (array of arrays, one per input, multiple per beam)
+          description: Rewritten texts (array of arrays, one per input, multiple per beam)
 
     # Models Types
     ModelsResponse:
@@ -436,7 +436,7 @@ components:
         - embedders
         - generators
         - recognizers
-        - questionators
+        - rewriters
       properties:
         chunkers:
           type: array
@@ -474,11 +474,11 @@ components:
             type: string
           description: Available GLiNER extractor models (zero-shot recognition with custom labels)
           example: ["gliner-small", "gliner-multitask"]
-        questionators:
+        rewriters:
           type: array
           items:
             type: string
-          description: Available Seq2Seq questionator models from models_dir/questionators/
+          description: Available Seq2Seq rewriter models from models_dir/rewriters/
           example: ["flan-t5-small", "lmqg-question-generation"]
 
     # Generation Types (LLM/Chat)
@@ -489,8 +489,14 @@ components:
 
     FinishReason:
       type: string
-      enum: [stop, length]
-      description: Reason why generation stopped
+      nullable: true
+      enum:
+        - stop
+        - length
+        - tool_calls
+        - content_filter
+        - function_call
+      description: Reason why generation stopped (null if still generating)
 
     ChatMessage:
       type: object
@@ -591,9 +597,7 @@ components:
         message:
           $ref: "#/components/schemas/GenerateMessage"
         finish_reason:
-          allOf:
-            - $ref: "#/components/schemas/FinishReason"
-          nullable: true
+          $ref: "#/components/schemas/FinishReason"
         logprobs:
           type: object
           nullable: true
@@ -694,7 +698,7 @@ components:
             - `{models_dir}/chunkers/` - Chunking models (ONNX)
             - `{models_dir}/rerankers/` - Reranking models (ONNX)
             - `{models_dir}/recognizers/` - Recognition models (ONNX)
-            - `{models_dir}/questionators/` - Question generation models (ONNX)
+            - `{models_dir}/rewriters/` - Seq2Seq rewriter models (ONNX)
 
             Defaults to ~/.termite/models (set via viper). If not set, only built-in fixed chunking is available.
           example: "~/.termite/models"
@@ -1243,15 +1247,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /questionate:
+  /rewrite:
     post:
-      summary: Generate questions
+      summary: Rewrite text using Seq2Seq models
       description: |
-        Generate questions using Seq2Seq questionator models (T5, FLAN-T5, BART, etc.).
+        Rewrite/transform text using Seq2Seq models (T5, FLAN-T5, BART, etc.).
 
         ## Models
 
-        - Models are auto-discovered from `models_dir/questionators/`
+        - Models are auto-discovered from `models_dir/rewriters/`
         - Seq2Seq models have encoder.onnx, decoder-init.onnx, and decoder.onnx files
         - Compatible with LMQG question generation models
 
@@ -1259,6 +1263,8 @@ paths:
 
         - **Question Generation**: Generate questions from answer-context pairs
         - **Query Generation**: Generate search queries from documents
+        - **Paraphrasing**: Rewrite text in different words
+        - **Translation**: Translate text between languages
 
         ## Example
 
@@ -1269,20 +1275,20 @@ paths:
           "inputs": ["generate question: <hl> Beyonce <hl> Beyonce starred as Etta James in Cadillac Records."]
         }
         ```
-      operationId: generateQuestions
+      operationId: rewriteText
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/QuestionGenerateRequest"
+              $ref: "#/components/schemas/RewriteRequest"
       responses:
         "200":
-          description: Questions generated successfully
+          description: Text rewritten successfully
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/QuestionGenerateResponse"
+                $ref: "#/components/schemas/RewriteResponse"
         "400":
           description: Invalid request
           content:
@@ -1312,7 +1318,7 @@ paths:
     get:
       summary: List available models
       description: |
-        Returns lists of available embedding, chunking, reranking, generator, NER, and question generation models.
+        Returns lists of available embedding, chunking, reranking, generator, NER, and rewriter models.
 
         ## Embedders
 
@@ -1339,9 +1345,9 @@ paths:
         - ONNX models from `models_dir/recognizers/`
         - Includes GLiNER models for zero-shot recognition
 
-        ## Questionators
+        ## Rewriters
 
-        - Seq2Seq models from `models_dir/questionators/`
+        - Seq2Seq models from `models_dir/rewriters/`
         - T5, FLAN-T5, BART, and LMQG question generation models
 
         Models are discovered at service startup and cached.

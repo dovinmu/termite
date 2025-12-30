@@ -34,7 +34,7 @@ Models are downloaded to the appropriate directory based on their type:
   - Rerankers:     models/rerankers/<model-name>/
   - Generators:    models/generators/<model-name>/
   - Recognizers:   models/recognizers/<model-name>/
-  - Questionators: models/questionators/<model-name>/
+  - Rewriters:     models/rewriters/<model-name>/
 
 Variants:
   f32     - FP32 baseline (default, highest accuracy)
@@ -74,8 +74,8 @@ Examples:
   # Pull GLiNER model from HuggingFace
   termite pull hf:onnx-community/gliner_small-v2.1 --type recognizer
 
-  # Pull questionator model from HuggingFace
-  termite pull hf:onnx-community/gemma-3-270m-it-ONNX --type questionator`,
+  # Pull rewriter model from HuggingFace
+  termite pull hf:onnx-community/gemma-3-270m-it-ONNX --type rewriter`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runPull,
 }
@@ -87,7 +87,7 @@ func init() {
 	pullCmd.Flags().StringSliceVar(&variants, "variants", nil,
 		"Variant IDs to download (f32,f16,i8,i8-st,i4). Defaults to f32 if not specified.")
 	pullCmd.Flags().String("type", "",
-		"Model type (embedder, chunker, reranker, generator, recognizer, questionator) - auto-detected for generators")
+		"Model type (embedder, chunker, reranker, generator, recognizer, rewriter) - auto-detected for generators")
 	pullCmd.Flags().String("hf-token", "",
 		"HuggingFace API token for gated models (or use HF_TOKEN env var)")
 	pullCmd.Flags().String("variant", "",

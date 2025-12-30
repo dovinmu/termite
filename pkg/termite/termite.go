@@ -292,7 +292,7 @@ func RunAsTermite(ctx context.Context, zl *zap.Logger, config Config, readyC cha
 	// If not set, generate endpoint will not be available
 	var generatorsModelsDir string
 	if config.ModelsDir != "" {
-		generatorsModelsDir = filepath.Join(config.ModelsDir, "questionators")
+		generatorsModelsDir = filepath.Join(config.ModelsDir, "rewriters")
 	}
 	seq2seqRegistry, err := NewSeq2SeqRegistry(generatorsModelsDir, sessionManager, zl.Named("seq2seq"))
 	if err != nil {

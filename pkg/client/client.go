@@ -293,14 +293,68 @@ func (c *TermiteClient) Recognize(ctx context.Context, model string, texts []str
 	return resp.JSON200, nil
 }
 
-// GenerateQuestions generates questions from input texts using a Seq2Seq questionator model.
-func (c *TermiteClient) GenerateQuestions(ctx context.Context, model string, inputs []string) (*oapi.QuestionGenerateResponse, error) {
-	req := oapi.QuestionGenerateRequest{
+// RewriteText rewrites input texts using a Seq2Seq rewriter model.
+func (c *TermiteClient) RewriteText(ctx context.Context, model string, inputs []string) (*oapi.RewriteResponse, error) {
+	req := oapi.RewriteRequest{
 		Model:  model,
 		Inputs: inputs,
 	}
 
-	resp, err := c.client.GenerateQuestionsWithResponse(ctx, req)
+	resp, err := c.client.RewriteTextWithResponse(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("sending request: %w", err)
+	}
+
+	if resp.JSON400 != nil {
+		return nil, fmt.Errorf("bad request: %s", resp.JSON400.Error)
+	}
+	if resp.JSON404 != nil {
+		return nil, fmt.Errorf("model not found: %s", resp.JSON404.Error)
+	}
+	if resp.JSON500 != nil {
+		return nil, fmt.Errorf("server error: %s", resp.JSON500.Error)
+	}
+	if resp.JSON503 != nil {
+		return nil, fmt.Errorf("service unavailable: %s", resp.JSON503.Error)
+	}
+	if resp.JSON200 == nil {
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode(), string(resp.Body))
+	}
+
+	return resp.JSON200, nil
+}
+
+// GenerateConfig contains configuration for text generation.
+type GenerateConfig struct {
+	MaxTokens   int
+	Temperature float32
+	TopP        float32
+	TopK        int
+}
+
+// Generate generates text using an LLM model (non-streaming).
+func (c *TermiteClient) Generate(ctx context.Context, model string, messages []oapi.ChatMessage, config *GenerateConfig) (*oapi.GenerateResponse, error) {
+	req := oapi.GenerateRequest{
+		Model:    model,
+		Messages: messages,
+	}
+
+	if config != nil {
+		if config.MaxTokens > 0 {
+			req.MaxTokens = config.MaxTokens
+		}
+		if config.Temperature > 0 {
+			req.Temperature = config.Temperature
+		}
+		if config.TopP > 0 {
+			req.TopP = config.TopP
+		}
+		if config.TopK > 0 {
+			req.TopK = config.TopK
+		}
+	}
+
+	resp, err := c.client.GenerateContentWithResponse(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("sending request: %w", err)
 	}

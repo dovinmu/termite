@@ -326,7 +326,7 @@ func ParseHuggingFaceRef(ref string) (repoID string, isHF bool) {
 }
 
 // DetectModelType attempts to detect the model type from repo contents.
-// It checks for genai_config.json (generator), encoder/decoder (questionator),
+// It checks for genai_config.json (generator), encoder/decoder (rewriter),
 // visual/text models (multimodal embedder), or regular model.onnx.
 func (c *HuggingFaceClient) DetectModelType(ctx context.Context, repoID string) (ModelType, error) {
 	files, err := c.ListRepoFiles(ctx, repoID)
@@ -364,9 +364,9 @@ func (c *HuggingFaceClient) DetectModelType(ctx context.Context, repoID string) 
 		return ModelTypeGenerator, nil
 	}
 
-	// Check for seq2seq (questionator)
+	// Check for seq2seq (rewriter)
 	if hasEncoder && hasDecoder {
-		return ModelTypeQuestionator, nil
+		return ModelTypeRewriter, nil
 	}
 
 	// Check for multimodal (could be embedder with CLIP)

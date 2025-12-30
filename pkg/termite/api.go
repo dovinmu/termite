@@ -84,21 +84,21 @@ func (t *TermiteAPI) RecognizeEntities(w http.ResponseWriter, r *http.Request) {
 	t.node.handleApiRecognize(w, r)
 }
 
-// GenerateQuestions implements ServerInterface
-func (t *TermiteAPI) GenerateQuestions(w http.ResponseWriter, r *http.Request) {
-	t.node.handleApiQuestionate(w, r)
+// RewriteText implements ServerInterface
+func (t *TermiteAPI) RewriteText(w http.ResponseWriter, r *http.Request) {
+	t.node.handleApiRewrite(w, r)
 }
 
 // ListModels implements ServerInterface
 func (t *TermiteAPI) ListModels(w http.ResponseWriter, r *http.Request) {
 	resp := ModelsResponse{
-		Chunkers:      []string{},
-		Rerankers:     []string{},
-		Embedders:     []string{},
-		Generators:    []string{},
-		Recognizers:   []string{},
-		Extractors:    []string{},
-		Questionators: []string{},
+		Chunkers:    []string{},
+		Rerankers:   []string{},
+		Embedders:   []string{},
+		Generators:  []string{},
+		Recognizers: []string{},
+		Extractors:  []string{},
+		Rewriters:   []string{},
 	}
 
 	if t.node.cachedChunker != nil {
@@ -123,7 +123,7 @@ func (t *TermiteAPI) ListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if t.node.seq2seqRegistry != nil {
-		resp.Questionators = t.node.seq2seqRegistry.List()
+		resp.Rewriters = t.node.seq2seqRegistry.List()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -883,22 +883,26 @@ func (ln *TermiteNode) handleStreamingGenerate(
 		return
 	}
 
-	// For now, generate the full response and simulate streaming
-	// TODO: Implement true token-by-token streaming when generator supports it
-	result, err := generator.Generate(r.Context(), messages, opts)
-	if err != nil {
-		ln.logger.Error("streaming generation failed",
-			zap.String("model", req.Model),
-			zap.Error(err))
-		// Send error as SSE event
-		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())
+	// Type-assert to StreamingGenerator for true token-by-token streaming
+	streamingGen, ok := generator.(generation.StreamingGenerator)
+	if !ok {
+		ln.logger.Error("generator does not support streaming",
+			zap.String("model", req.Model))
+		fmt.Fprintf(w, "data: {\"error\": \"generator does not support streaming\"}\n\n")
 		flusher.Flush()
 		return
 	}
 
-	// Record metrics
-	RecordGeneratorRequest(req.Model)
-	RecordTokenGeneration(req.Model, result.TokensUsed)
+	// Start streaming generation
+	tokenChan, errChan, err := streamingGen.GenerateStream(r.Context(), messages, opts)
+	if err != nil {
+		ln.logger.Error("failed to start streaming generation",
+			zap.String("model", req.Model),
+			zap.Error(err))
+		fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())
+		flusher.Flush()
+		return
+	}
 
 	// Send first chunk with role
 	firstChunk := GenerateChunk{
@@ -919,34 +923,49 @@ func (ln *TermiteNode) handleStreamingGenerate(
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
 
-	// Send content chunk
-	contentChunk := GenerateChunk{
-		Id:      completionID,
-		Object:  GenerateChunkObjectChatCompletionChunk,
-		Created: created,
-		Model:   req.Model,
-		Choices: []GenerateChunkChoice{
-			{
-				Index: 0,
-				Delta: GenerateDelta{
-					Content: result.Text,
+	// Stream tokens as they arrive
+	var tokenCount int
+	for token := range tokenChan {
+		tokenCount++
+
+		chunk := GenerateChunk{
+			Id:      completionID,
+			Object:  GenerateChunkObjectChatCompletionChunk,
+			Created: created,
+			Model:   req.Model,
+			Choices: []GenerateChunkChoice{
+				{
+					Index: 0,
+					Delta: GenerateDelta{
+						Content: token.Token,
+					},
 				},
 			},
-		},
+		}
+		data, _ := json.Marshal(chunk)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
 	}
-	data, _ = json.Marshal(contentChunk)
-	fmt.Fprintf(w, "data: %s\n\n", data)
-	flusher.Flush()
+
+	// Check for errors from the error channel
+	select {
+	case err := <-errChan:
+		if err != nil {
+			ln.logger.Error("streaming generation error",
+				zap.String("model", req.Model),
+				zap.Error(err))
+			fmt.Fprintf(w, "data: {\"error\": \"%s\"}\n\n", err.Error())
+			flusher.Flush()
+			return
+		}
+	default:
+	}
+
+	// Record metrics
+	RecordGeneratorRequest(req.Model)
+	RecordTokenGeneration(req.Model, tokenCount)
 
 	// Send final chunk with finish_reason
-	var chunkFinishReason FinishReason
-	switch result.FinishReason {
-	case "length":
-		chunkFinishReason = FinishReasonLength
-	default:
-		chunkFinishReason = FinishReasonStop
-	}
-
 	finalChunk := GenerateChunk{
 		Id:      completionID,
 		Object:  GenerateChunkObjectChatCompletionChunk,
@@ -956,7 +975,7 @@ func (ln *TermiteNode) handleStreamingGenerate(
 			{
 				Index:        0,
 				Delta:        GenerateDelta{},
-				FinishReason: chunkFinishReason,
+				FinishReason: FinishReasonStop,
 			},
 		},
 	}
@@ -970,16 +989,16 @@ func (ln *TermiteNode) handleStreamingGenerate(
 
 	ln.logger.Info("streaming generation completed",
 		zap.String("model", req.Model),
-		zap.Int("tokens_generated", result.TokensUsed))
+		zap.Int("tokens_generated", tokenCount))
 }
 
-// handleApiQuestionate handles Seq2Seq question generation requests
-func (ln *TermiteNode) handleApiQuestionate(w http.ResponseWriter, r *http.Request) {
+// handleApiRewrite handles Seq2Seq text rewriting requests
+func (ln *TermiteNode) handleApiRewrite(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = r.Body.Close() }()
 
-	// Check if question generation is available
+	// Check if rewriting is available
 	if ln.seq2seqRegistry == nil || len(ln.seq2seqRegistry.List()) == 0 {
-		http.Error(w, "question generation not available: no models configured", http.StatusServiceUnavailable)
+		http.Error(w, "rewriting not available: no models configured", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -1006,7 +1025,7 @@ func (ln *TermiteNode) handleApiQuestionate(w http.ResponseWriter, r *http.Reque
 	// Decode request
 	var req struct {
 		Model  string   `json:"model"`  // Model name to use (required)
-		Inputs []string `json:"inputs"` // Input texts to generate from
+		Inputs []string `json:"inputs"` // Input texts to rewrite
 	}
 	if err := decoder.NewStreamDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1033,21 +1052,21 @@ func (ln *TermiteNode) handleApiQuestionate(w http.ResponseWriter, r *http.Reque
 	// Generate text
 	output, err := model.Generate(r.Context(), req.Inputs)
 	if err != nil {
-		ln.logger.Error("question generation failed",
+		ln.logger.Error("rewriting failed",
 			zap.String("model", req.Model),
 			zap.Int("num_inputs", len(req.Inputs)),
 			zap.Error(err))
-		http.Error(w, fmt.Sprintf("question generation failed: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("rewriting failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	ln.logger.Info("question generation request completed",
+	ln.logger.Info("rewrite request completed",
 		zap.String("model", req.Model),
 		zap.Int("num_inputs", len(req.Inputs)),
 		zap.Int("num_outputs", len(output.Texts)))
 
 	// Send response
-	resp := QuestionGenerateResponse{
+	resp := RewriteResponse{
 		Model: req.Model,
 		Texts: output.Texts,
 	}

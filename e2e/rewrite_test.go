@@ -30,15 +30,15 @@ import (
 )
 
 const (
-	// Questionator model name (pulled from HuggingFace in TestMain)
+	// Rewriter model name (pulled from HuggingFace in TestMain)
 	// Using a small T5-based model for question generation
-	questionatorModelName = "flan-t5-small-squad-qg"
+	rewriterModelName = "flan-t5-small-squad-qg"
 )
 
-// TestQuestionateE2E tests the Questionator (Seq2Seq question generation) pipeline:
-// 1. Starts termite server with Questionator model
-// 2. Tests question generation from context
-func TestQuestionateE2E(t *testing.T) {
+// TestRewriteE2E tests the Rewriter (Seq2Seq text rewriting) pipeline:
+// 1. Starts termite server with Rewriter model
+// 2. Tests text rewriting (question generation from context)
+func TestRewriteE2E(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping E2E test in short mode")
 	}
@@ -90,11 +90,11 @@ func TestQuestionateE2E(t *testing.T) {
 
 	// Run test cases
 	t.Run("ListModels", func(t *testing.T) {
-		testListModelsQuestionator(t, ctx, termiteClient)
+		testListModelsRewriter(t, ctx, termiteClient)
 	})
 
-	t.Run("GenerateQuestions", func(t *testing.T) {
-		testGenerateQuestions(t, ctx, termiteClient)
+	t.Run("RewriteText", func(t *testing.T) {
+		testRewriteText(t, ctx, termiteClient)
 	})
 
 	// Graceful shutdown
@@ -109,32 +109,32 @@ func TestQuestionateE2E(t *testing.T) {
 	}
 }
 
-// testListModelsQuestionator verifies the Questionator model appears in the models list
-func testListModelsQuestionator(t *testing.T, ctx context.Context, c *client.TermiteClient) {
+// testListModelsRewriter verifies the Rewriter model appears in the models list
+func testListModelsRewriter(t *testing.T, ctx context.Context, c *client.TermiteClient) {
 	t.Helper()
 
 	models, err := c.ListModels(ctx)
 	require.NoError(t, err, "ListModels failed")
 
-	// Check that Questionator model is in the questionators list
-	foundQuestionator := false
-	for _, name := range models.Questionators {
-		if name == questionatorModelName {
-			foundQuestionator = true
+	// Check that Rewriter model is in the rewriters list
+	foundRewriter := false
+	for _, name := range models.Rewriters {
+		if name == rewriterModelName {
+			foundRewriter = true
 			break
 		}
 	}
 
-	if !foundQuestionator {
-		t.Errorf("Questionator model %s not found in questionators: %v",
-			questionatorModelName, models.Questionators)
+	if !foundRewriter {
+		t.Errorf("Rewriter model %s not found in rewriters: %v",
+			rewriterModelName, models.Rewriters)
 	} else {
-		t.Logf("Found Questionator model in questionators: %v", models.Questionators)
+		t.Logf("Found Rewriter model in rewriters: %v", models.Rewriters)
 	}
 }
 
-// testGenerateQuestions tests question generation from context
-func testGenerateQuestions(t *testing.T, ctx context.Context, c *client.TermiteClient) {
+// testRewriteText tests text rewriting (question generation from context)
+func testRewriteText(t *testing.T, ctx context.Context, c *client.TermiteClient) {
 	t.Helper()
 
 	// LMQG models use a specific format: "generate question: <hl> answer <hl> context"
@@ -143,13 +143,13 @@ func testGenerateQuestions(t *testing.T, ctx context.Context, c *client.TermiteC
 		"generate question: <hl> 1955 <hl> Steve Jobs was born in 1955 in San Francisco.",
 	}
 
-	resp, err := c.GenerateQuestions(ctx, questionatorModelName, inputs)
-	require.NoError(t, err, "GenerateQuestions failed")
+	resp, err := c.RewriteText(ctx, rewriterModelName, inputs)
+	require.NoError(t, err, "RewriteText failed")
 
-	assert.Equal(t, questionatorModelName, resp.Model)
+	assert.Equal(t, rewriterModelName, resp.Model)
 	assert.Len(t, resp.Texts, len(inputs), "Should have generated text for each input")
 
-	// Log the generated questions
+	// Log the rewritten texts
 	for i, generated := range resp.Texts {
 		t.Logf("Input %d generated texts:", i)
 		for j, text := range generated {

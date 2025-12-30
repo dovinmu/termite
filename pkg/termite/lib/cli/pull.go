@@ -193,7 +193,7 @@ func PullFromHuggingFace(repoID string, opts HuggingFaceOptions) error {
 		fmt.Println("Detecting model type...")
 		detected, err := client.DetectModelType(ctx, repoID)
 		if err != nil {
-			return fmt.Errorf("failed to detect model type: %w\nUse --type flag to specify manually (embedder, chunker, reranker, generator, recognizer, questionator)", err)
+			return fmt.Errorf("failed to detect model type: %w\nUse --type flag to specify manually (embedder, chunker, reranker, generator, recognizer, rewriter)", err)
 		}
 		modelType = detected
 		fmt.Printf("Detected type: %s\n", modelType)
@@ -286,7 +286,7 @@ func ListLocalModels(opts ListOptions) error {
 		modelregistry.ModelTypeReranker,
 		modelregistry.ModelTypeGenerator,
 		modelregistry.ModelTypeRecognizer,
-		modelregistry.ModelTypeQuestionator,
+		modelregistry.ModelTypeRewriter,
 	}
 
 	var filteredType modelregistry.ModelType

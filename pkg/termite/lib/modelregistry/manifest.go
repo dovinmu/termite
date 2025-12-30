@@ -27,12 +27,12 @@ import (
 type ModelType string
 
 const (
-	ModelTypeEmbedder     ModelType = "embedder"
-	ModelTypeChunker      ModelType = "chunker"
-	ModelTypeReranker     ModelType = "reranker"
-	ModelTypeGenerator    ModelType = "generator"
-	ModelTypeRecognizer   ModelType = "recognizer"
-	ModelTypeQuestionator ModelType = "questionator"
+	ModelTypeEmbedder   ModelType = "embedder"
+	ModelTypeChunker    ModelType = "chunker"
+	ModelTypeReranker   ModelType = "reranker"
+	ModelTypeGenerator  ModelType = "generator"
+	ModelTypeRecognizer ModelType = "recognizer"
+	ModelTypeRewriter   ModelType = "rewriter"
 )
 
 // Model capabilities
@@ -55,10 +55,10 @@ func ParseModelType(s string) (ModelType, error) {
 		return ModelTypeGenerator, nil
 	case "recognizer", "recognizers":
 		return ModelTypeRecognizer, nil
-	case "questionator", "questionators":
-		return ModelTypeQuestionator, nil
+	case "rewriter", "rewriters":
+		return ModelTypeRewriter, nil
 	default:
-		return "", fmt.Errorf("unknown model type: %s (valid: embedder, chunker, reranker, generator, recognizer, questionator)", s)
+		return "", fmt.Errorf("unknown model type: %s (valid: embedder, chunker, reranker, generator, recognizer, rewriter)", s)
 	}
 }
 
@@ -80,8 +80,8 @@ func (t ModelType) DirName() string {
 		return "generators"
 	case ModelTypeRecognizer:
 		return "recognizers"
-	case ModelTypeQuestionator:
-		return "questionators"
+	case ModelTypeRewriter:
+		return "rewriters"
 	default:
 		return string(t) + "s"
 	}
@@ -268,10 +268,10 @@ func (m *ModelManifest) Validate() error {
 		if len(m.Backends) > 0 && !m.SupportsBackend("onnx") {
 			return fmt.Errorf("multimodal embedders only support ONNX backend")
 		}
-	} else if m.Type == ModelTypeQuestionator {
-		// Seq2seq models (questionators) require encoder.onnx + decoder.onnx
+	} else if m.Type == ModelTypeRewriter {
+		// Seq2seq models (rewriters) require encoder.onnx + decoder.onnx
 		if !hasEncoderOnnx || !hasDecoderOnnx {
-			return fmt.Errorf("questionator model must include encoder.onnx and decoder.onnx")
+			return fmt.Errorf("rewriter model must include encoder.onnx and decoder.onnx")
 		}
 	} else {
 		// Standard models require model.onnx
