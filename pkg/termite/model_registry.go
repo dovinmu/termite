@@ -560,19 +560,51 @@ func (r *EmbedderRegistry) Close() error {
 
 // NERRegistry manages multiple NER (Named Entity Recognition) models loaded from a directory
 type NERRegistry struct {
-	models      map[string]ner.Model      // model name -> NER model instance
-	recognizers map[string]ner.Recognizer // model name -> zero-shot capable Recognizer (e.g., GLiNER)
-	mu          sync.RWMutex
-	logger      *zap.Logger
+	models       map[string]ner.Model      // model name -> NER model instance
+	recognizers  map[string]ner.Recognizer // model name -> zero-shot capable Recognizer (e.g., GLiNER)
+	capabilities map[string][]string       // model name -> list of capabilities (labels, zeroshot, relations, answers)
+	mu           sync.RWMutex
+	logger       *zap.Logger
+}
+
+// loadRecognizerCapabilities loads capabilities from manifest.json or auto-detects them.
+// Priority: manifest.json > auto-detection based on model type
+func loadRecognizerCapabilities(modelPath string, isGLiNER bool, glinerModel *gliner.HugotGLiNER) []string {
+	// Try to load from manifest.json first
+	manifestPath := filepath.Join(modelPath, "manifest.json")
+	if data, err := os.ReadFile(manifestPath); err == nil {
+		var manifest modelregistry.ModelManifest
+		if err := json.Unmarshal(data, &manifest); err == nil && len(manifest.Capabilities) > 0 {
+			return manifest.Capabilities
+		}
+	}
+
+	// Auto-detect based on model type
+	if isGLiNER && glinerModel != nil {
+		caps := []string{modelregistry.CapabilityLabels, modelregistry.CapabilityZeroshot}
+		// Check if model supports relations (multitask models)
+		if glinerModel.SupportsRelationExtraction() {
+			caps = append(caps, modelregistry.CapabilityRelations)
+		}
+		// Check if model supports QA (multitask models)
+		if glinerModel.SupportsQA() {
+			caps = append(caps, modelregistry.CapabilityAnswers)
+		}
+		return caps
+	}
+
+	// Default for traditional NER models
+	return []string{modelregistry.CapabilityLabels}
 }
 
 // NewNERRegistry creates a registry and discovers NER models in the given directory
 // If sessionManager is provided, all models will use it for backend selection (required for ONNX Runtime)
 func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*NERRegistry, error) {
 	registry := &NERRegistry{
-		models:      make(map[string]ner.Model),
-		recognizers: make(map[string]ner.Recognizer),
-		logger:      logger,
+		models:       make(map[string]ner.Model),
+		recognizers:  make(map[string]ner.Recognizer),
+		capabilities: make(map[string][]string),
+		logger:       logger,
 	}
 
 	if modelsDir == "" {
@@ -629,11 +661,15 @@ func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logg
 			} else {
 				registry.recognizers[modelName] = model
 				registry.models[modelName] = model // Also register as regular Model for compatibility
+				// Load capabilities from manifest or auto-detect
+				caps := loadRecognizerCapabilities(modelPath, true, model)
+				registry.capabilities[modelName] = caps
 				logger.Info("Successfully loaded GLiNER model",
 					zap.String("name", modelName),
 					zap.Bool("quantized", quantized),
 					zap.String("backend", string(backendUsed)),
-					zap.Strings("default_labels", model.Labels()))
+					zap.Strings("default_labels", model.Labels()),
+					zap.Strings("capabilities", caps))
 			}
 		} else {
 			// Discover all available model variants for regular NER models
@@ -681,11 +717,15 @@ func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logg
 						zap.Error(err))
 				} else {
 					registry.models[registryName] = model
+					// Load capabilities from manifest or use default (labels only for traditional NER)
+					caps := loadRecognizerCapabilities(modelPath, false, nil)
+					registry.capabilities[registryName] = caps
 					logger.Info("Successfully loaded NER model",
 						zap.String("name", registryName),
 						zap.String("onnxFile", onnxFilename),
 						zap.String("backend", string(backendUsed)),
-						zap.Int("poolSize", poolSize))
+						zap.Int("poolSize", poolSize),
+						zap.Strings("capabilities", caps))
 				}
 			}
 		}
@@ -753,6 +793,44 @@ func (r *NERRegistry) ListRecognizers() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// GetCapabilities returns the capabilities for a specific model.
+// Returns nil if the model is not found.
+func (r *NERRegistry) GetCapabilities(modelName string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if caps, ok := r.capabilities[modelName]; ok {
+		return caps
+	}
+	return nil
+}
+
+// HasCapability checks if a model has a specific capability.
+func (r *NERRegistry) HasCapability(modelName, capability string) bool {
+	caps := r.GetCapabilities(modelName)
+	for _, c := range caps {
+		if c == capability {
+			return true
+		}
+	}
+	return false
+}
+
+// ListWithCapabilities returns a map of model name to capabilities for all models.
+func (r *NERRegistry) ListWithCapabilities() map[string][]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	result := make(map[string][]string, len(r.capabilities))
+	for name, caps := range r.capabilities {
+		// Make a copy of the slice to avoid sharing internal state
+		capsCopy := make([]string, len(caps))
+		copy(capsCopy, caps)
+		result[name] = capsCopy
+	}
+	return result
 }
 
 // Close closes all loaded NER models

@@ -120,6 +120,21 @@ func (t *TermiteAPI) ListModels(w http.ResponseWriter, r *http.Request) {
 	if t.node.nerRegistry != nil {
 		resp.Recognizers = t.node.nerRegistry.List()
 		resp.Extractors = t.node.nerRegistry.ListRecognizers()
+		// Populate recognizer info with capabilities
+		capsMap := t.node.nerRegistry.ListWithCapabilities()
+		if len(capsMap) > 0 {
+			resp.RecognizerInfo = make(map[string]RecognizerModelInfo, len(capsMap))
+			for name, caps := range capsMap {
+				// Convert string capabilities to RecognizerCapability enum
+				enumCaps := make([]RecognizerCapability, len(caps))
+				for i, c := range caps {
+					enumCaps[i] = RecognizerCapability(c)
+				}
+				resp.RecognizerInfo[name] = RecognizerModelInfo{
+					Capabilities: enumCaps,
+				}
+			}
+		}
 	}
 
 	if t.node.seq2seqRegistry != nil {

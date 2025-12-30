@@ -40,6 +40,24 @@ const (
 	// CapabilityMultimodal indicates the model can embed both images and text
 	// (e.g., CLIP models with visual_model.onnx + text_model.onnx)
 	CapabilityMultimodal = "multimodal"
+
+	// Recognizer capabilities - describe what extraction tasks the model supports
+
+	// CapabilityLabels indicates the model performs entity extraction (NER)
+	// extracting labeled spans from text (e.g., PER, ORG, LOC)
+	CapabilityLabels = "labels"
+
+	// CapabilityZeroshot indicates the model supports arbitrary labels at inference time
+	// (e.g., GLiNER models that can extract any entity type without retraining)
+	CapabilityZeroshot = "zeroshot"
+
+	// CapabilityRelations indicates the model supports relation extraction between entities
+	// (e.g., GLiNER multitask models, REBEL)
+	CapabilityRelations = "relations"
+
+	// CapabilityAnswers indicates the model supports extractive question answering
+	// (e.g., GLiNER multitask models)
+	CapabilityAnswers = "answers"
 )
 
 // ParseModelType parses a string into a ModelType
@@ -208,6 +226,21 @@ func (m *ModelManifest) HasCapability(capability string) bool {
 // IsMultimodal returns true if the model has the multimodal capability.
 func (m *ModelManifest) IsMultimodal() bool {
 	return m.HasCapability(CapabilityMultimodal)
+}
+
+// IsZeroshot returns true if the model supports zero-shot recognition (arbitrary labels).
+func (m *ModelManifest) IsZeroshot() bool {
+	return m.HasCapability(CapabilityZeroshot)
+}
+
+// SupportsRelations returns true if the model can extract relations between entities.
+func (m *ModelManifest) SupportsRelations() bool {
+	return m.HasCapability(CapabilityRelations)
+}
+
+// SupportsAnswers returns true if the model supports extractive question answering.
+func (m *ModelManifest) SupportsAnswers() bool {
+	return m.HasCapability(CapabilityAnswers)
 }
 
 // Validate checks that the manifest is well-formed

@@ -1033,6 +1033,53 @@ components:
           example:
             - flan-t5-small
             - lmqg-question-generation
+        recognizer_info:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/RecognizerModelInfo'
+          description: |
+            Detailed information about recognizer models including capabilities.
+            Map of model name to model info. Use this to determine what capabilities
+            each recognizer supports (labels, zeroshot, relations, answers).
+          example:
+            bert-base-ner:
+              capabilities:
+                - labels
+            gliner-small:
+              capabilities:
+                - labels
+                - zeroshot
+            gliner-multitask:
+              capabilities:
+                - labels
+                - zeroshot
+                - relations
+                - answers
+    RecognizerCapability:
+      type: string
+      enum:
+        - labels
+        - zeroshot
+        - relations
+        - answers
+      description: |
+        Capability that a recognizer model supports:
+        - labels: Entity extraction (NER) - extracts labeled spans like PER, ORG, LOC
+        - zeroshot: Supports arbitrary labels at inference time (GLiNER models)
+        - relations: Relation extraction between entities (GLiNER multitask, REBEL)
+        - answers: Extractive question answering (GLiNER multitask)
+    RecognizerModelInfo:
+      type: object
+      description: Detailed information about a recognizer model
+      properties:
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecognizerCapability'
+          description: List of capabilities this recognizer model supports
+          example:
+            - labels
+            - zeroshot
     Role:
       type: string
       enum:
