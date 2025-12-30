@@ -140,7 +140,7 @@ func TestParseManifest(t *testing.T) {
 	})
 
 	t.Run("invalid schema version", func(t *testing.T) {
-		data := `{"schemaVersion": 2, "name": "test", "type": "embedder", "files": [{"name": "model.onnx", "digest": "sha256:abc", "size": 1}]}`
+		data := `{"schemaVersion": 99, "name": "test", "type": "embedder", "files": [{"name": "model.onnx", "digest": "sha256:abc", "size": 1}]}`
 		_, err := ParseManifest([]byte(data))
 		if err == nil {
 			t.Error("Expected error for invalid schema version")
