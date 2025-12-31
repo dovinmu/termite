@@ -41,8 +41,9 @@ env:
 jobs:
   test:
     name: Test (${{ matrix.backend }})
-    runs-on:
-      - codebuild-GitHubActionsRunnerTermite-${{ github.run_id }}-${{ github.run_attempt }}
+    # runs-on:
+    #   - codebuild-GitHubActionsRunnerTermite-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -166,8 +167,9 @@ jobs:
 
   e2e:
     name: E2E Tests (ONNX)
-    runs-on:
-      - codebuild-GitHubActionsRunnerTermite-${{ github.run_id }}-${{ github.run_attempt }}
+    # runs-on:
+    #   - codebuild-GitHubActionsRunnerTermite-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: ubuntu-latest-16-cores
     # Only run on main branch pushes to avoid long CI times on PRs
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
