@@ -209,16 +209,28 @@ type VariantEntry struct {
 	Files []ModelFile
 }
 
-// UnmarshalJSON handles both single file and array of files
+// UnmarshalJSON handles multiple formats:
+// 1. Array of files: [{"name": "...", ...}]
+// 2. Single file object: {"name": "...", ...}
+// 3. Object with files key: {"files": [{"name": "...", ...}]}
 func (v *VariantEntry) UnmarshalJSON(data []byte) error {
-	// Try as array first
+	// Try as array of files first
 	var files []ModelFile
 	if err := json.Unmarshal(data, &files); err == nil {
 		v.Files = files
 		return nil
 	}
 
-	// Try as single file
+	// Try as object with "files" key (registry format)
+	var wrapper struct {
+		Files []ModelFile `json:"files"`
+	}
+	if err := json.Unmarshal(data, &wrapper); err == nil && len(wrapper.Files) > 0 {
+		v.Files = wrapper.Files
+		return nil
+	}
+
+	// Try as single file object
 	var file ModelFile
 	if err := json.Unmarshal(data, &file); err != nil {
 		return err

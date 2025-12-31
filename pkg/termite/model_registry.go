@@ -107,10 +107,8 @@ func (d *DiscoveredModel) FullName() string {
 }
 
 // discoverModelsInDir scans a directory for models using the owner/model structure.
-// It supports both the new owner/model structure and the legacy flat structure.
 //
-// New structure: modelsDir/owner/model-name/model.onnx
-// Legacy structure: modelsDir/model-name/model.onnx
+// Structure: modelsDir/owner/model-name/model.onnx
 func discoverModelsInDir(modelsDir string, modelType modelregistry.ModelType, logger *zap.Logger) ([]DiscoveredModel, error) {
 	if modelsDir == "" {
 		return nil, nil
@@ -122,48 +120,35 @@ func discoverModelsInDir(modelsDir string, modelType modelregistry.ModelType, lo
 
 	var discovered []DiscoveredModel
 
-	// First level: could be owner directories or model directories (legacy)
-	entries, err := os.ReadDir(modelsDir)
+	// First level: owner directories
+	ownerEntries, err := os.ReadDir(modelsDir)
 	if err != nil {
 		return nil, fmt.Errorf("reading models directory: %w", err)
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	for _, ownerEntry := range ownerEntries {
+		if !ownerEntry.IsDir() {
 			continue
 		}
 
-		firstLevelPath := filepath.Join(modelsDir, entry.Name())
+		owner := ownerEntry.Name()
+		ownerPath := filepath.Join(modelsDir, owner)
 
-		// Check if this is an owner directory (has subdirectories with models)
-		// or a model directory itself (legacy flat structure)
-		subEntries, err := os.ReadDir(firstLevelPath)
+		// Second level: model directories within owner
+		modelEntries, err := os.ReadDir(ownerPath)
 		if err != nil {
-			logger.Debug("Failed to read directory", zap.String("path", firstLevelPath), zap.Error(err))
+			logger.Debug("Failed to read owner directory", zap.String("path", ownerPath), zap.Error(err))
 			continue
 		}
 
-		// Check if this looks like a model directory (has model.onnx or manifest)
-		isModelDir := hasModelFiles(firstLevelPath)
-
-		if isModelDir {
-			// Legacy flat structure: modelsDir/model-name/
-			model := discoverSingleModel(firstLevelPath, "", entry.Name(), modelType, logger)
+		for _, modelEntry := range modelEntries {
+			if !modelEntry.IsDir() {
+				continue
+			}
+			modelPath := filepath.Join(ownerPath, modelEntry.Name())
+			model := discoverSingleModel(modelPath, owner, modelEntry.Name(), modelType, logger)
 			if model != nil {
 				discovered = append(discovered, *model)
-			}
-		} else {
-			// New owner structure: modelsDir/owner/model-name/
-			owner := entry.Name()
-			for _, subEntry := range subEntries {
-				if !subEntry.IsDir() {
-					continue
-				}
-				modelPath := filepath.Join(firstLevelPath, subEntry.Name())
-				model := discoverSingleModel(modelPath, owner, subEntry.Name(), modelType, logger)
-				if model != nil {
-					discovered = append(discovered, *model)
-				}
 			}
 		}
 	}
@@ -258,8 +243,8 @@ type ChunkerRegistry struct {
 }
 
 // NewChunkerRegistry creates a registry and discovers models in the given directory
-// Directory structure: modelsDir/model_name/model.onnx
 // If sessionManager is provided, it will be used to obtain sessions for model loading (required for ONNX Runtime)
+// Supports owner/model-name directory structure (e.g., chunkers/owner/model-name/)
 func NewChunkerRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*ChunkerRegistry, error) {
 	registry := &ChunkerRegistry{
 		models: make(map[string]chunking.Chunker),
@@ -278,27 +263,23 @@ func NewChunkerRegistry(modelsDir string, sessionManager *hugot.SessionManager, 
 		return registry, nil
 	}
 
-	// Scan directory for model subdirectories
-	entries, err := os.ReadDir(modelsDir)
+	// Use discoverModelsInDir which handles owner/model structure
+	discovered, err := discoverModelsInDir(modelsDir, modelregistry.ModelTypeChunker, logger)
 	if err != nil {
-		return nil, fmt.Errorf("reading models directory: %w", err)
+		return nil, fmt.Errorf("discovering chunker models: %w", err)
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+	// Pool size for concurrent pipeline access
+	// Cap at 4 to avoid excessive memory usage (each pipeline loads full model)
+	poolSize := min(runtime.NumCPU(), 4)
 
-		modelName := entry.Name()
-		modelPath := filepath.Join(modelsDir, modelName)
-
-		// Discover all available model variants
-		variants := discoverModelVariants(modelPath)
+	for _, dm := range discovered {
+		modelPath := dm.Path
+		registryFullName := dm.FullName()
+		variants := dm.Variants
 
 		// Skip if no model files exist
 		if len(variants) == 0 {
-			logger.Debug("Skipping directory without model files",
-				zap.String("dir", modelName))
 			continue
 		}
 
@@ -312,20 +293,16 @@ func NewChunkerRegistry(modelsDir string, sessionManager *hugot.SessionManager, 
 			}
 		}
 		logger.Info("Discovered chunker model directory",
-			zap.String("name", modelName),
+			zap.String("name", registryFullName),
 			zap.String("path", modelPath),
 			zap.Strings("variants", variantIDs))
-
-		// Pool size for concurrent pipeline access
-		// Cap at 4 to avoid excessive memory usage (each pipeline loads full model)
-		poolSize := min(runtime.NumCPU(), 4)
 
 		// Load each variant
 		for variantID, onnxFilename := range variants {
 			// Determine registry name
-			registryName := modelName
+			registryName := registryFullName
 			if variantID != "" {
-				registryName = modelName + "-" + variantID
+				registryName = registryFullName + "-" + variantID
 			}
 
 			// Create chunker config for this model with sensible defaults
@@ -403,6 +380,7 @@ type RerankerRegistry struct {
 
 // NewRerankerRegistry creates a registry and discovers models in the given directory
 // If sessionManager is provided, it will be used to obtain sessions for model loading (required for ONNX Runtime)
+// Supports owner/model-name directory structure (e.g., rerankers/owner/model-name/)
 func NewRerankerRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*RerankerRegistry, error) {
 	registry := &RerankerRegistry{
 		models: make(map[string]reranking.Model),
@@ -421,27 +399,23 @@ func NewRerankerRegistry(modelsDir string, sessionManager *hugot.SessionManager,
 		return registry, nil
 	}
 
-	// Scan directory for model subdirectories
-	entries, err := os.ReadDir(modelsDir)
+	// Use discoverModelsInDir which handles owner/model structure
+	discovered, err := discoverModelsInDir(modelsDir, modelregistry.ModelTypeReranker, logger)
 	if err != nil {
-		return nil, fmt.Errorf("reading models directory: %w", err)
+		return nil, fmt.Errorf("discovering reranker models: %w", err)
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+	// Pool size for concurrent pipeline access
+	// Cap at 4 to avoid excessive memory usage (each pipeline loads full model)
+	poolSize := min(runtime.NumCPU(), 4)
 
-		modelName := entry.Name()
-		modelPath := filepath.Join(modelsDir, modelName)
-
-		// Discover all available model variants
-		variants := discoverModelVariants(modelPath)
+	for _, dm := range discovered {
+		modelPath := dm.Path
+		registryFullName := dm.FullName()
+		variants := dm.Variants
 
 		// Skip if no model files exist
 		if len(variants) == 0 {
-			logger.Debug("Skipping directory without model files",
-				zap.String("dir", modelName))
 			continue
 		}
 
@@ -455,20 +429,16 @@ func NewRerankerRegistry(modelsDir string, sessionManager *hugot.SessionManager,
 			}
 		}
 		logger.Info("Discovered reranker model directory",
-			zap.String("name", modelName),
+			zap.String("name", registryFullName),
 			zap.String("path", modelPath),
 			zap.Strings("variants", variantIDs))
-
-		// Pool size for concurrent pipeline access
-		// Cap at 4 to avoid excessive memory usage (each pipeline loads full model)
-		poolSize := min(runtime.NumCPU(), 4)
 
 		// Load each variant
 		for variantID, onnxFilename := range variants {
 			// Determine registry name
-			registryName := modelName
+			registryName := registryFullName
 			if variantID != "" {
-				registryName = modelName + "-" + variantID
+				registryName = registryFullName + "-" + variantID
 			}
 
 			// Pass model path, ONNX filename, and session manager to pooled reranker
@@ -543,6 +513,7 @@ type EmbedderRegistry struct {
 
 // NewEmbedderRegistry creates a registry and discovers models in the given directory
 // If sessionManager is provided, it will be used to obtain sessions for model loading (required for ONNX Runtime)
+// Supports both legacy flat structure (modelsDir/model-name/) and new owner structure (modelsDir/owner/model-name/)
 func NewEmbedderRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*EmbedderRegistry, error) {
 	registry := &EmbedderRegistry{
 		models: make(map[string]embeddings.Embedder),
@@ -561,40 +532,40 @@ func NewEmbedderRegistry(modelsDir string, sessionManager *hugot.SessionManager,
 		return registry, nil
 	}
 
-	// Scan directory for model subdirectories
-	entries, err := os.ReadDir(modelsDir)
+	// Use discoverModelsInDir which handles both legacy flat and new owner/model structures
+	discovered, err := discoverModelsInDir(modelsDir, modelregistry.ModelTypeEmbedder, logger)
 	if err != nil {
-		return nil, fmt.Errorf("reading models directory: %w", err)
+		return nil, fmt.Errorf("discovering embedder models: %w", err)
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+	// Pool size for concurrent pipeline access
+	// Cap at 4 to avoid excessive memory usage (each pipeline loads full model)
+	poolSize := min(runtime.NumCPU(), 4)
 
-		modelName := entry.Name()
-		modelPath := filepath.Join(modelsDir, modelName)
+	for _, model := range discovered {
+		modelPath := model.Path
+		registryFullName := model.FullName()
 
 		// Check if this is a multimodal (CLIP-style) model
 		hasMultimodalStd, hasMultimodalQt := isMultimodalModel(modelPath)
 		if hasMultimodalStd || hasMultimodalQt {
 			logger.Info("Discovered multimodal embedder model directory",
-				zap.String("name", modelName),
+				zap.String("name", registryFullName),
 				zap.String("path", modelPath),
 				zap.Bool("has_standard", hasMultimodalStd),
 				zap.Bool("has_quantized", hasMultimodalQt))
 
 			// Load standard precision multimodal model
 			if hasMultimodalStd {
-				model, backendUsed, err := termembeddings.NewHugotCLIPEmbedderWithSessionManager(modelPath, false, sessionManager, nil, logger.Named(modelName))
+				loaded, backendUsed, err := termembeddings.NewHugotCLIPEmbedderWithSessionManager(modelPath, false, sessionManager, nil, logger.Named(registryFullName))
 				if err != nil {
 					logger.Warn("Failed to load multimodal embedder model",
-						zap.String("name", modelName),
+						zap.String("name", registryFullName),
 						zap.Error(err))
 				} else {
-					registry.models[modelName] = model
+					registry.models[registryFullName] = loaded
 					logger.Info("Successfully loaded multimodal embedder model",
-						zap.String("name", modelName),
+						zap.String("name", registryFullName),
 						zap.String("type", "clip"),
 						zap.String("backend", string(backendUsed)))
 				}
@@ -602,14 +573,14 @@ func NewEmbedderRegistry(modelsDir string, sessionManager *hugot.SessionManager,
 
 			// Load quantized multimodal model with suffix
 			if hasMultimodalQt {
-				quantizedName := modelName + "-i8-qt"
-				model, backendUsed, err := termembeddings.NewHugotCLIPEmbedderWithSessionManager(modelPath, true, sessionManager, nil, logger.Named(quantizedName))
+				quantizedName := registryFullName + "-i8-qt"
+				loaded, backendUsed, err := termembeddings.NewHugotCLIPEmbedderWithSessionManager(modelPath, true, sessionManager, nil, logger.Named(quantizedName))
 				if err != nil {
 					logger.Warn("Failed to load quantized multimodal embedder model",
 						zap.String("name", quantizedName),
 						zap.Error(err))
 				} else {
-					registry.models[quantizedName] = model
+					registry.models[quantizedName] = loaded
 					logger.Info("Successfully loaded quantized multimodal embedder model",
 						zap.String("name", quantizedName),
 						zap.String("type", "clip"),
@@ -619,13 +590,9 @@ func NewEmbedderRegistry(modelsDir string, sessionManager *hugot.SessionManager,
 			continue // Skip standard embedder loading for multimodal models
 		}
 
-		// Discover all available model variants (standard embedders)
-		variants := discoverModelVariants(modelPath)
-
-		// Skip if no model files exist
+		// Standard embedders - use discovered variants
+		variants := model.Variants
 		if len(variants) == 0 {
-			logger.Debug("Skipping directory without model files",
-				zap.String("dir", modelName))
 			continue
 		}
 
@@ -639,31 +606,27 @@ func NewEmbedderRegistry(modelsDir string, sessionManager *hugot.SessionManager,
 			}
 		}
 		logger.Info("Discovered embedder model directory",
-			zap.String("name", modelName),
+			zap.String("name", registryFullName),
 			zap.String("path", modelPath),
 			zap.Strings("variants", variantIDs))
-
-		// Pool size for concurrent pipeline access
-		// Cap at 4 to avoid excessive memory usage (each pipeline loads full model)
-		poolSize := min(runtime.NumCPU(), 4)
 
 		// Load each variant
 		for variantID, onnxFilename := range variants {
 			// Determine registry name
-			registryName := modelName
+			registryName := registryFullName
 			if variantID != "" {
-				registryName = modelName + "-" + variantID
+				registryName = registryFullName + "-" + variantID
 			}
 
 			// Pass model path, ONNX filename, and session manager to pooled embedder
-			model, backendUsed, err := termembeddings.NewPooledHugotEmbedderWithSessionManager(modelPath, onnxFilename, poolSize, sessionManager, nil, logger.Named(registryName))
+			loaded, backendUsed, err := termembeddings.NewPooledHugotEmbedderWithSessionManager(modelPath, onnxFilename, poolSize, sessionManager, nil, logger.Named(registryName))
 			if err != nil {
 				logger.Warn("Failed to load embedder model variant",
 					zap.String("name", registryName),
 					zap.String("onnxFile", onnxFilename),
 					zap.Error(err))
 			} else {
-				registry.models[registryName] = model
+				registry.models[registryName] = loaded
 				logger.Info("Successfully loaded embedder model",
 					zap.String("name", registryName),
 					zap.String("onnxFile", onnxFilename),
@@ -766,6 +729,7 @@ func loadRecognizerCapabilities(modelPath string, isGLiNER bool, glinerModel *gl
 
 // NewNERRegistry creates a registry and discovers NER models in the given directory
 // If sessionManager is provided, all models will use it for backend selection (required for ONNX Runtime)
+// Supports owner/model-name directory structure (e.g., recognizers/onnx-community/gliner_small-v2.1/)
 func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*NERRegistry, error) {
 	registry := &NERRegistry{
 		models:       make(map[string]ner.Model),
@@ -786,19 +750,18 @@ func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logg
 		return registry, nil
 	}
 
-	// Scan directory for model subdirectories
-	entries, err := os.ReadDir(modelsDir)
+	// Use discoverModelsInDir which handles owner/model structure
+	discovered, err := discoverModelsInDir(modelsDir, modelregistry.ModelTypeRecognizer, logger)
 	if err != nil {
-		return nil, fmt.Errorf("reading NER models directory: %w", err)
+		return nil, fmt.Errorf("discovering NER models: %w", err)
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+	// Pool size for concurrent pipeline access
+	poolSize := min(runtime.NumCPU(), 4)
 
-		modelName := entry.Name()
-		modelPath := filepath.Join(modelsDir, modelName)
+	for _, dm := range discovered {
+		modelPath := dm.Path
+		registryFullName := dm.FullName()
 
 		// Check model type: GLiNER, REBEL, or traditional NER
 		isGLiNER := gliner.IsGLiNERModel(modelPath)
@@ -807,18 +770,18 @@ func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logg
 		if isREBEL {
 			// Load REBEL relation extraction model
 			logger.Info("Discovered REBEL model directory",
-				zap.String("name", modelName),
+				zap.String("name", registryFullName),
 				zap.String("path", modelPath))
 
-			model, backendUsed, err := rebel.NewHugotREBELWithSessionManager(modelPath, sessionManager, logger.Named(modelName))
+			model, backendUsed, err := rebel.NewHugotREBELWithSessionManager(modelPath, sessionManager, logger.Named(registryFullName))
 			if err != nil {
 				logger.Warn("Failed to load REBEL model",
-					zap.String("name", modelName),
+					zap.String("name", registryFullName),
 					zap.Error(err))
 			} else {
 				// REBEL implements ner.Recognizer with relation extraction capability
-				registry.recognizers[modelName] = model
-				registry.models[modelName] = model
+				registry.recognizers[registryFullName] = model
+				registry.models[registryFullName] = model
 				// REBEL models have 'relations' capability
 				caps := []string{modelregistry.CapabilityRelations}
 				// Check manifest for additional capabilities
@@ -829,16 +792,16 @@ func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logg
 						caps = manifest.Capabilities
 					}
 				}
-				registry.capabilities[modelName] = caps
+				registry.capabilities[registryFullName] = caps
 				logger.Info("Successfully loaded REBEL model",
-					zap.String("name", modelName),
+					zap.String("name", registryFullName),
 					zap.String("backend", string(backendUsed)),
 					zap.Strings("capabilities", caps))
 			}
 		} else if isGLiNER {
 			// Load GLiNER model (no variants, uses model.onnx or model_quantized.onnx)
 			logger.Info("Discovered GLiNER model directory",
-				zap.String("name", modelName),
+				zap.String("name", registryFullName),
 				zap.String("path", modelPath))
 
 			// Try quantized first, then non-quantized
@@ -847,24 +810,24 @@ func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logg
 				quantized = true
 			} else if _, err := os.Stat(filepath.Join(modelPath, "model.onnx")); err != nil {
 				logger.Debug("Skipping GLiNER directory without model files",
-					zap.String("dir", modelName))
+					zap.String("dir", registryFullName))
 				continue
 			}
 
-			model, backendUsed, err := gliner.NewHugotGLiNERWithSessionManager(modelPath, quantized, sessionManager, nil, logger.Named(modelName))
+			model, backendUsed, err := gliner.NewHugotGLiNERWithSessionManager(modelPath, quantized, sessionManager, nil, logger.Named(registryFullName))
 			if err != nil {
 				logger.Warn("Failed to load GLiNER model",
-					zap.String("name", modelName),
+					zap.String("name", registryFullName),
 					zap.Bool("quantized", quantized),
 					zap.Error(err))
 			} else {
-				registry.recognizers[modelName] = model
-				registry.models[modelName] = model // Also register as regular Model for compatibility
+				registry.recognizers[registryFullName] = model
+				registry.models[registryFullName] = model // Also register as regular Model for compatibility
 				// Load capabilities from manifest or auto-detect
 				caps := loadRecognizerCapabilities(modelPath, true, model)
-				registry.capabilities[modelName] = caps
+				registry.capabilities[registryFullName] = caps
 				logger.Info("Successfully loaded GLiNER model",
-					zap.String("name", modelName),
+					zap.String("name", registryFullName),
 					zap.Bool("quantized", quantized),
 					zap.String("backend", string(backendUsed)),
 					zap.Strings("default_labels", model.Labels()),
@@ -872,12 +835,8 @@ func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logg
 			}
 		} else {
 			// Discover all available model variants for regular NER models
-			variants := discoverModelVariants(modelPath)
-
-			// Skip if no model files exist
+			variants := dm.Variants
 			if len(variants) == 0 {
-				logger.Debug("Skipping directory without model files",
-					zap.String("dir", modelName))
 				continue
 			}
 
@@ -891,20 +850,16 @@ func NewNERRegistry(modelsDir string, sessionManager *hugot.SessionManager, logg
 				}
 			}
 			logger.Info("Discovered NER model directory",
-				zap.String("name", modelName),
+				zap.String("name", registryFullName),
 				zap.String("path", modelPath),
 				zap.Strings("variants", variantIDs))
-
-			// Pool size for concurrent pipeline access
-			// Cap at 4 to avoid excessive memory usage (each pipeline loads full model)
-			poolSize := min(runtime.NumCPU(), 4)
 
 			// Load each variant
 			for variantID, onnxFilename := range variants {
 				// Determine registry name
-				registryName := modelName
+				registryName := registryFullName
 				if variantID != "" {
-					registryName = modelName + "-" + variantID
+					registryName = registryFullName + "-" + variantID
 				}
 
 				// Pass model path, ONNX filename, and session manager to pooled NER model
@@ -1057,6 +1012,7 @@ type Seq2SeqRegistry struct {
 // NewSeq2SeqRegistry creates a registry and discovers Seq2Seq models in the given directory
 // Seq2Seq models have encoder.onnx, decoder-init.onnx, and decoder.onnx files
 // If sessionManager is provided, all models will use it for backend selection
+// Supports owner/model-name directory structure (e.g., rewriters/lmqg/flan-t5-small-squad-qg/)
 func NewSeq2SeqRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*Seq2SeqRegistry, error) {
 	registry := &Seq2SeqRegistry{
 		models: make(map[string]seq2seq.Model),
@@ -1075,42 +1031,38 @@ func NewSeq2SeqRegistry(modelsDir string, sessionManager *hugot.SessionManager, 
 		return registry, nil
 	}
 
-	// Scan directory for model subdirectories
-	entries, err := os.ReadDir(modelsDir)
+	// Use discoverModelsInDir which handles owner/model structure
+	discovered, err := discoverModelsInDir(modelsDir, modelregistry.ModelTypeRewriter, logger)
 	if err != nil {
-		return nil, fmt.Errorf("reading Seq2Seq models directory: %w", err)
+		return nil, fmt.Errorf("discovering Seq2Seq models: %w", err)
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		modelName := entry.Name()
-		modelPath := filepath.Join(modelsDir, modelName)
+	for _, dm := range discovered {
+		modelPath := dm.Path
+		registryFullName := dm.FullName()
 
 		// Check if this is a Seq2Seq model (has encoder.onnx, decoder-init.onnx, decoder.onnx)
 		if !seq2seq.IsSeq2SeqModel(modelPath) {
 			logger.Debug("Skipping directory - not a Seq2Seq model",
-				zap.String("dir", modelName))
+				zap.String("dir", registryFullName))
 			continue
 		}
 
 		logger.Info("Discovered Seq2Seq model directory",
-			zap.String("name", modelName),
+			zap.String("name", registryFullName),
 			zap.String("path", modelPath))
 
 		// Load the Seq2Seq model
-		model, backendUsed, err := seq2seq.NewHugotSeq2SeqWithSessionManager(modelPath, sessionManager, nil, logger.Named(modelName))
+		model, backendUsed, err := seq2seq.NewHugotSeq2SeqWithSessionManager(modelPath, sessionManager, nil, logger.Named(registryFullName))
 		if err != nil {
 			logger.Warn("Failed to load Seq2Seq model",
-				zap.String("name", modelName),
+				zap.String("name", registryFullName),
 				zap.Error(err))
 		} else {
-			registry.models[modelName] = model
+			registry.models[registryFullName] = model
 			config := model.Config()
 			logger.Info("Successfully loaded Seq2Seq model",
-				zap.String("name", modelName),
+				zap.String("name", registryFullName),
 				zap.String("task", config.Task),
 				zap.Int("max_length", config.MaxLength),
 				zap.String("backend", string(backendUsed)))
@@ -1376,8 +1328,8 @@ func isValidGeneratorModel(modelPath string) bool {
 }
 
 // NewGeneratorRegistry creates a registry and discovers models in the given directory
-// Directory structure: modelsDir/model_name/model.onnx (or model_name/onnx/model.onnx)
 // If sessionManager is provided, it will be used to obtain sessions for model loading
+// Supports owner/model-name directory structure (e.g., generators/google/gemma-2b/)
 func NewGeneratorRegistry(modelsDir string, sessionManager *hugot.SessionManager, logger *zap.Logger) (*GeneratorRegistry, error) {
 	registry := &GeneratorRegistry{
 		models: make(map[string]generation.Generator),
@@ -1396,79 +1348,59 @@ func NewGeneratorRegistry(modelsDir string, sessionManager *hugot.SessionManager
 		return registry, nil
 	}
 
-	// Scan directory for model subdirectories
-	entries, err := os.ReadDir(modelsDir)
+	// Use discoverModelsInDir which handles owner/model structure
+	discovered, err := discoverModelsInDir(modelsDir, modelregistry.ModelTypeGenerator, logger)
 	if err != nil {
-		return nil, fmt.Errorf("reading generator models directory: %w", err)
+		return nil, fmt.Errorf("discovering generator models: %w", err)
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		modelName := entry.Name()
-		modelPath := filepath.Join(modelsDir, modelName)
+	for _, dm := range discovered {
+		modelPath := dm.Path
+		registryFullName := dm.FullName()
 
 		// Check for genai_config.json (preferred) or model.onnx in root or onnx/ subdirectory
-		hasValidModel := false
-
-		// First check for genai_config.json (onnxruntime-genai native format)
-		genaiConfigPath := filepath.Join(modelPath, "genai_config.json")
-		if _, err := os.Stat(genaiConfigPath); err == nil {
-			hasValidModel = true
-		}
-
-		// Fall back to checking for model.onnx
-		if !hasValidModel {
-			for _, subpath := range []string{"", "onnx"} {
-				checkPath := filepath.Join(modelPath, subpath, "model.onnx")
-				if _, err := os.Stat(checkPath); err == nil {
-					hasValidModel = true
-					if subpath != "" {
-						modelPath = filepath.Join(modelPath, subpath)
-					}
-					break
-				}
+		if !isValidGeneratorModel(modelPath) {
+			// Also check onnx/ subdirectory
+			onnxSubpath := filepath.Join(modelPath, "onnx")
+			if isValidGeneratorModel(onnxSubpath) {
+				modelPath = onnxSubpath
+			} else {
+				logger.Debug("Skipping directory - not a valid generator model",
+					zap.String("dir", registryFullName))
+				continue
 			}
 		}
 
-		if !hasValidModel {
-			logger.Debug("Skipping directory - no genai_config.json or model.onnx found",
-				zap.String("dir", modelName))
-			continue
-		}
-
 		logger.Info("Discovered generator model directory",
-			zap.String("name", modelName),
+			zap.String("name", registryFullName),
 			zap.String("path", modelPath))
 
 		// Try to generate genai_config.json if needed
 		if err := generateGenaiConfig(modelPath, logger); err != nil {
 			logger.Warn("Failed to generate genai_config.json",
-				zap.String("name", modelName),
+				zap.String("name", registryFullName),
 				zap.Error(err))
 		}
 
 		// Load the generator model
 		var model generation.Generator
 		var backendUsed hugot.BackendType
-		var err error
+		var loadErr error
 
 		if sessionManager != nil {
-			model, backendUsed, err = generation.NewHugotGeneratorWithSessionManager(modelPath, sessionManager, nil, logger.Named(modelName))
+			model, backendUsed, loadErr = generation.NewHugotGeneratorWithSessionManager(modelPath, sessionManager, nil, logger.Named(registryFullName))
 		} else {
-			model, err = generation.NewHugotGeneratorWithSession(modelPath, nil, logger.Named(modelName))
+			model, loadErr = generation.NewHugotGeneratorWithSession(modelPath, nil, logger.Named(registryFullName))
 		}
 
-		if err != nil {
+		if loadErr != nil {
 			logger.Warn("Failed to load generator model",
-				zap.String("name", modelName),
-				zap.Error(err))
+				zap.String("name", registryFullName),
+				zap.Error(loadErr))
 		} else {
-			registry.models[modelName] = model
+			registry.models[registryFullName] = model
 			logger.Info("Successfully loaded generator model",
-				zap.String("name", modelName),
+				zap.String("name", registryFullName),
 				zap.String("backend", string(backendUsed)))
 		}
 	}

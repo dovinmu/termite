@@ -115,6 +115,50 @@ func TestParseManifest(t *testing.T) {
 		}
 	})
 
+	// Test registry format with variants having "files" array wrapper
+	registryManifest := `{
+		"schemaVersion": 2,
+		"name": "bge-small-en-v1.5",
+		"owner": "BAAI",
+		"type": "embedder",
+		"source": "BAAI/bge-small-en-v1.5",
+		"files": [
+			{"name": "model.onnx", "digest": "sha256:abc123", "size": 12345},
+			{"name": "tokenizer.json", "digest": "sha256:def456", "size": 1000}
+		],
+		"variants": {
+			"f16": {"files": [{"name": "model_f16.onnx", "digest": "sha256:jkl012", "size": 8000}]},
+			"i8": {"files": [{"name": "model_i8.onnx", "digest": "sha256:ghi789", "size": 6789}]}
+		}
+	}`
+
+	t.Run("valid manifest with registry variant format", func(t *testing.T) {
+		manifest, err := ParseManifest([]byte(registryManifest))
+		if err != nil {
+			t.Fatalf("ParseManifest() error = %v", err)
+		}
+
+		if manifest.Name != "bge-small-en-v1.5" {
+			t.Errorf("Name = %v, want bge-small-en-v1.5", manifest.Name)
+		}
+		if manifest.Owner != "BAAI" {
+			t.Errorf("Owner = %v, want BAAI", manifest.Owner)
+		}
+		if len(manifest.Variants) != 2 {
+			t.Errorf("len(Variants) = %v, want 2", len(manifest.Variants))
+		}
+		f16Variant, ok := manifest.Variants["f16"]
+		if !ok {
+			t.Fatal("Variants should contain 'f16' key")
+		}
+		if len(f16Variant.Files) != 1 {
+			t.Errorf("f16 variant should have 1 file, got %d", len(f16Variant.Files))
+		}
+		if f16Variant.Files[0].Name != "model_f16.onnx" {
+			t.Errorf("f16 variant file name = %v, want model_f16.onnx", f16Variant.Files[0].Name)
+		}
+	})
+
 	t.Run("missing name", func(t *testing.T) {
 		data := `{"schemaVersion": 1, "type": "embedder", "files": [{"name": "model.onnx", "digest": "sha256:abc", "size": 1}]}`
 		_, err := ParseManifest([]byte(data))

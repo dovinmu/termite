@@ -33,13 +33,10 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
-// generatorHFRepo is the HuggingFace repository for the generator model.
+// generatorModelName is the HuggingFace repository for the generator model.
 // This uses the onnxruntime-genai compatible Gemma 3 model.
-const generatorHFRepo = "onnxruntime/Gemma-3-ONNX"
-
-// generatorModelName is the expected generator model name after pulling.
-// This is derived from the HuggingFace repo basename.
-const generatorModelName = "Gemma-3-ONNX"
+// Uses owner/model format matching the directory structure.
+const generatorModelName = "onnxruntime/Gemma-3-ONNX"
 
 // TestGeneratorE2E tests the Generator (LLM text generation) pipeline:
 // 1. Downloads the generator model from HuggingFace if not present
@@ -56,10 +53,10 @@ func TestGeneratorE2E(t *testing.T) {
 	modelPath := filepath.Join(generatorsDir, generatorModelName)
 
 	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
-		t.Logf("Generator model not found at %s, pulling from HuggingFace: %s", modelPath, generatorHFRepo)
+		t.Logf("Generator model not found at %s, pulling from HuggingFace: %s", modelPath, generatorModelName)
 
 		// Pull the model from HuggingFace (auto-detects generator type)
-		err := cli.PullFromHuggingFace(generatorHFRepo, cli.HuggingFaceOptions{
+		err := cli.PullFromHuggingFace(generatorModelName, cli.HuggingFaceOptions{
 			ModelsDir: modelsDir,
 			ModelType: "", // Auto-detect
 		})

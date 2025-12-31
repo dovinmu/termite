@@ -31,7 +31,8 @@ import (
 
 const (
 	// GLiNER model name (pulled from HuggingFace in TestMain)
-	glinerModelName = "gliner_small-v2.1"
+	// Uses owner/model format matching the directory structure
+	glinerModelName = "onnx-community/gliner_small-v2.1"
 )
 
 // TestGLiNERE2E tests the GLiNER (entity recognition) pipeline:

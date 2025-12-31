@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -163,6 +162,7 @@ func NewLazyEmbedderRegistry(
 }
 
 // discoverModels scans the models directory and records available models
+// Supports owner/model-name directory structure (e.g., embedders/BAAI/bge-small-en-v1.5/)
 func (r *LazyEmbedderRegistry) discoverModels() error {
 	if r.modelsDir == "" {
 		r.logger.Info("No embedder models directory configured")
@@ -175,26 +175,20 @@ func (r *LazyEmbedderRegistry) discoverModels() error {
 		return nil
 	}
 
-	entries, err := os.ReadDir(r.modelsDir)
+	// Use discoverModelsInDir which handles owner/model structure
+	discovered, err := discoverModelsInDir(r.modelsDir, "embedder", r.logger)
 	if err != nil {
-		return fmt.Errorf("reading models directory: %w", err)
+		return fmt.Errorf("discovering embedder models: %w", err)
 	}
 
 	poolSize := min(runtime.NumCPU(), 4)
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+	for _, dm := range discovered {
+		modelPath := dm.Path
+		registryFullName := dm.FullName()
+		variants := dm.Variants
 
-		modelName := entry.Name()
-		modelPath := filepath.Join(r.modelsDir, modelName)
-
-		// Discover all available variants using shared helper
-		variants := discoverModelVariants(modelPath)
 		if len(variants) == 0 {
-			r.logger.Debug("Skipping directory without model files",
-				zap.String("dir", modelName))
 			continue
 		}
 
@@ -209,15 +203,15 @@ func (r *LazyEmbedderRegistry) discoverModels() error {
 		}
 
 		r.logger.Info("Discovered embedder model (not loaded)",
-			zap.String("name", modelName),
+			zap.String("name", registryFullName),
 			zap.String("path", modelPath),
 			zap.Strings("variants", variantIDs))
 
 		// Register each variant
 		for variantID, onnxFilename := range variants {
-			registryName := modelName
+			registryName := registryFullName
 			if variantID != "" {
-				registryName = modelName + "-" + variantID
+				registryName = registryFullName + "-" + variantID
 			}
 
 			r.discovered[registryName] = &ModelInfo{
