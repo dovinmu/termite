@@ -32,7 +32,7 @@ import (
 const (
 	// Rewriter model name (pulled from HuggingFace in TestMain)
 	// Using a small T5-based model for question generation
-	rewriterModelName = "flan-t5-small-squad-qg"
+	rewriterModelName = "lmqg/flan-t5-small-squad-qg"
 )
 
 // TestRewriteE2E tests the Rewriter (Seq2Seq text rewriting) pipeline:

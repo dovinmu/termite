@@ -69,7 +69,7 @@ func TestMemoryGrowthWithVaryingShapes(t *testing.T) {
 	defer registry.Close()
 
 	// Get an embedder
-	embedder, err := registry.Get("bge-small-en-v1.5")
+	embedder, err := registry.Get("BAAI/bge-small-en-v1.5")
 	if err != nil {
 		t.Skipf("Model not available: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestMemoryWithRepeatedShapes(t *testing.T) {
 	}
 	defer registry.Close()
 
-	embedder, err := registry.Get("bge-small-en-v1.5")
+	embedder, err := registry.Get("BAAI/bge-small-en-v1.5")
 	if err != nil {
 		t.Skipf("Model not available: %v", err)
 	}
@@ -252,7 +252,7 @@ func BenchmarkMemoryPerShape(b *testing.B) {
 	}
 	defer registry.Close()
 
-	embedder, err := registry.Get("bge-small-en-v1.5")
+	embedder, err := registry.Get("BAAI/bge-small-en-v1.5")
 	if err != nil {
 		b.Skipf("Model not available: %v", err)
 	}

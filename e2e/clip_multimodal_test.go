@@ -36,7 +36,7 @@ import (
 
 const (
 	// CLIP model name in the registry
-	clipModelName = "clip-vit-base-patch32"
+	clipModelName = "openai/clip-vit-base-patch32"
 
 	// Expected embedding dimension for CLIP ViT-B/32
 	clipEmbeddingDim = 512

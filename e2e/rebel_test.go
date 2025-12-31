@@ -33,7 +33,7 @@ import (
 
 const (
 	// REBEL model name (expected to be in models/recognizers/)
-	rebelModelName = "rebel-large"
+	rebelModelName = "Babelscape/rebel-large"
 )
 
 // TestREBELE2E tests the REBEL (relation extraction) pipeline:

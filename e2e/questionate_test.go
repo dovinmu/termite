@@ -32,7 +32,7 @@ import (
 const (
 	// Questionator model name (pulled from HuggingFace in TestMain)
 	// Using a small T5-based model for question generation
-	questionatorModelName = "flan-t5-small-squad-qg"
+	questionatorModelName = "lmqg/flan-t5-small-squad-qg"
 )
 
 // TestQuestionateE2E tests the Questionator (Seq2Seq question generation) pipeline:

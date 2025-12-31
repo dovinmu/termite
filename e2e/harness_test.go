@@ -30,13 +30,13 @@ import (
 
 // Models to download for e2e tests (from model registry)
 var testModels = []string{
-	"bge-small-en-v1.5",
-	"clip-vit-base-patch32",
-	"flan-t5-small-squad-qg",
-	"rebel-large",
+	"BAAI/bge-small-en-v1.5",
+	"openai/clip-vit-base-patch32",
+	"lmqg/flan-t5-small-squad-qg",
+	"Babelscape/rebel-large",
 	// Uncomment when needed - these are larger models
-	// "chonky-mmbert-small-multilingual-1",
-	// "mxbai-rerank-base-v1",
+	// "mirth/chonky-mmbert-small-multilingual-1",
+	// "mixedbread-ai/mxbai-rerank-base-v1",
 }
 
 // HuggingFace models for e2e tests
@@ -116,15 +116,16 @@ func downloadTestModels() error {
 
 	for _, modelName := range testModels {
 		// Determine model path based on model type
+		// Path includes owner: embedders/BAAI/bge-small-en-v1.5
 		var modelPath string
 		switch modelName {
-		case "mxbai-rerank-base-v1":
+		case "mixedbread-ai/mxbai-rerank-base-v1":
 			modelPath = filepath.Join(testModelsDir, "rerankers", modelName)
-		case "chonky-mmbert-small-multilingual-1":
+		case "mirth/chonky-mmbert-small-multilingual-1":
 			modelPath = filepath.Join(testModelsDir, "chunkers", modelName)
-		case "flan-t5-small-squad-qg":
+		case "lmqg/flan-t5-small-squad-qg":
 			modelPath = filepath.Join(testModelsDir, "rewriters", modelName)
-		case "rebel-large":
+		case "Babelscape/rebel-large":
 			modelPath = filepath.Join(testModelsDir, "recognizers", modelName)
 		default:
 			modelPath = filepath.Join(testModelsDir, "embedders", modelName)
