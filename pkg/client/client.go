@@ -55,6 +55,44 @@ func NewAssistantMessage(content string) oapi.ChatMessage {
 	return NewChatMessage(oapi.RoleAssistant, content)
 }
 
+// NewMultimodalUserMessage creates a user ChatMessage with text and image content.
+// The imageDataURI should be a base64 data URI like "data:image/png;base64,...".
+func NewMultimodalUserMessage(text string, imageDataURIs ...string) (oapi.ChatMessage, error) {
+	var parts []oapi.ContentPart
+
+	// Add text part if provided
+	if text != "" {
+		var textPart oapi.ContentPart
+		if err := textPart.FromTextContentPart(oapi.TextContentPart{
+			Type: oapi.TextContentPartTypeText,
+			Text: text,
+		}); err != nil {
+			return oapi.ChatMessage{}, fmt.Errorf("creating text part: %w", err)
+		}
+		parts = append(parts, textPart)
+	}
+
+	// Add image parts
+	for _, dataURI := range imageDataURIs {
+		var imagePart oapi.ContentPart
+		if err := imagePart.FromImageURLContentPart(oapi.ImageURLContentPart{
+			Type: oapi.ImageURLContentPartTypeImageUrl,
+			ImageUrl: oapi.ImageURL{
+				Url: dataURI,
+			},
+		}); err != nil {
+			return oapi.ChatMessage{}, fmt.Errorf("creating image part: %w", err)
+		}
+		parts = append(parts, imagePart)
+	}
+
+	msg := oapi.ChatMessage{Role: oapi.RoleUser}
+	if err := msg.Content.FromChatMessageContent1(parts); err != nil {
+		return oapi.ChatMessage{}, fmt.Errorf("setting content parts: %w", err)
+	}
+	return msg, nil
+}
+
 // TermiteClient is a client for interacting with the Termite API.
 type TermiteClient struct {
 	client  *oapi.ClientWithResponses
