@@ -42,8 +42,8 @@ type ModelInfo struct {
 	Variants     []string // Available variant IDs (e.g., ["f16", "i8"])
 }
 
-// LazyEmbedderRegistry manages embedding models with lazy loading and TTL-based unloading
-type LazyEmbedderRegistry struct {
+// EmbedderRegistry manages embedding models with lazy loading and TTL-based unloading
+type EmbedderRegistry struct {
 	modelsDir      string
 	sessionManager *hugot.SessionManager
 	logger         *zap.Logger
@@ -64,19 +64,19 @@ type LazyEmbedderRegistry struct {
 	maxLoadedModels uint64
 }
 
-// LazyEmbedderConfig configures the lazy embedder registry
-type LazyEmbedderConfig struct {
+// EmbedderConfig configures the embedder registry
+type EmbedderConfig struct {
 	ModelsDir       string
 	KeepAlive       time.Duration // How long to keep models loaded (0 = forever)
 	MaxLoadedModels uint64        // Max models in memory (0 = unlimited)
 }
 
-// NewLazyEmbedderRegistry creates a new lazy-loading embedder registry
-func NewLazyEmbedderRegistry(
-	config LazyEmbedderConfig,
+// NewEmbedderRegistry creates a new lazy-loading embedder registry
+func NewEmbedderRegistry(
+	config EmbedderConfig,
 	sessionManager *hugot.SessionManager,
 	logger *zap.Logger,
-) (*LazyEmbedderRegistry, error) {
+) (*EmbedderRegistry, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -86,7 +86,7 @@ func NewLazyEmbedderRegistry(
 		keepAlive = ttlcache.NoTTL // Never expire
 	}
 
-	registry := &LazyEmbedderRegistry{
+	registry := &EmbedderRegistry{
 		modelsDir:       config.ModelsDir,
 		sessionManager:  sessionManager,
 		logger:          logger,
@@ -163,7 +163,7 @@ func NewLazyEmbedderRegistry(
 
 // discoverModels scans the models directory and records available models
 // Supports owner/model-name directory structure (e.g., embedders/BAAI/bge-small-en-v1.5/)
-func (r *LazyEmbedderRegistry) discoverModels() error {
+func (r *EmbedderRegistry) discoverModels() error {
 	if r.modelsDir == "" {
 		r.logger.Info("No embedder models directory configured")
 		return nil
@@ -234,7 +234,7 @@ func (r *LazyEmbedderRegistry) discoverModels() error {
 }
 
 // Get returns an embedder by model name, loading it if necessary
-func (r *LazyEmbedderRegistry) Get(modelName string) (embeddings.Embedder, error) {
+func (r *EmbedderRegistry) Get(modelName string) (embeddings.Embedder, error) {
 	// Check if model is pinned (never evicted)
 	r.pinnedMu.RLock()
 	if embedder, ok := r.pinned[modelName]; ok {
@@ -266,7 +266,7 @@ func (r *LazyEmbedderRegistry) Get(modelName string) (embeddings.Embedder, error
 }
 
 // loadModel loads a model on demand
-func (r *LazyEmbedderRegistry) loadModel(info *ModelInfo) (embeddings.Embedder, error) {
+func (r *EmbedderRegistry) loadModel(info *ModelInfo) (embeddings.Embedder, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -308,7 +308,7 @@ func (r *LazyEmbedderRegistry) loadModel(info *ModelInfo) (embeddings.Embedder, 
 }
 
 // Touch refreshes the TTL for a model (call after each use to implement Ollama-style keep-alive)
-func (r *LazyEmbedderRegistry) Touch(modelName string) {
+func (r *EmbedderRegistry) Touch(modelName string) {
 	if item := r.cache.Get(modelName); item != nil {
 		// Get refreshes TTL automatically
 		r.logger.Debug("Refreshed model keep-alive",
@@ -317,7 +317,7 @@ func (r *LazyEmbedderRegistry) Touch(modelName string) {
 }
 
 // List returns all available (discovered) model names
-func (r *LazyEmbedderRegistry) List() []string {
+func (r *EmbedderRegistry) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -329,7 +329,7 @@ func (r *LazyEmbedderRegistry) List() []string {
 }
 
 // ListLoaded returns currently loaded model names (from cache and pinned)
-func (r *LazyEmbedderRegistry) ListLoaded() []string {
+func (r *EmbedderRegistry) ListLoaded() []string {
 	// Get cache keys
 	keys := r.cache.Keys()
 
@@ -349,7 +349,7 @@ func (r *LazyEmbedderRegistry) ListLoaded() []string {
 }
 
 // IsLoaded checks if a model is currently loaded (in cache or pinned)
-func (r *LazyEmbedderRegistry) IsLoaded(modelName string) bool {
+func (r *EmbedderRegistry) IsLoaded(modelName string) bool {
 	r.pinnedMu.RLock()
 	isPinned := r.pinned[modelName] != nil
 	r.pinnedMu.RUnlock()
@@ -358,7 +358,7 @@ func (r *LazyEmbedderRegistry) IsLoaded(modelName string) bool {
 
 // Unload explicitly unloads a model (triggers eviction callback)
 // Note: Pinned models cannot be unloaded via this method.
-func (r *LazyEmbedderRegistry) Unload(modelName string) {
+func (r *EmbedderRegistry) Unload(modelName string) {
 	r.pinnedMu.RLock()
 	isPinned := r.pinned[modelName] != nil
 	r.pinnedMu.RUnlock()
@@ -374,7 +374,7 @@ func (r *LazyEmbedderRegistry) Unload(modelName string) {
 // Pin marks a model as pinned (never evicted). If the model is already loaded
 // in the cache, it is moved to the pinned map. If not loaded, it will be loaded
 // first. Pinned models survive TTL expiration and LRU eviction.
-func (r *LazyEmbedderRegistry) Pin(modelName string) error {
+func (r *EmbedderRegistry) Pin(modelName string) error {
 	// Check if already pinned
 	r.pinnedMu.RLock()
 	if r.pinned[modelName] != nil {
@@ -408,14 +408,14 @@ func (r *LazyEmbedderRegistry) Pin(modelName string) error {
 }
 
 // IsPinned returns true if a model is pinned (never evicted)
-func (r *LazyEmbedderRegistry) IsPinned(modelName string) bool {
+func (r *EmbedderRegistry) IsPinned(modelName string) bool {
 	r.pinnedMu.RLock()
 	defer r.pinnedMu.RUnlock()
 	return r.pinned[modelName] != nil
 }
 
 // Preload loads specified models at startup to avoid first-request latency
-func (r *LazyEmbedderRegistry) Preload(modelNames []string) error {
+func (r *EmbedderRegistry) Preload(modelNames []string) error {
 	if len(modelNames) == 0 {
 		return nil
 	}
@@ -448,7 +448,7 @@ func (r *LazyEmbedderRegistry) Preload(modelNames []string) error {
 }
 
 // Close stops the cache and unloads all models (including pinned)
-func (r *LazyEmbedderRegistry) Close() error {
+func (r *EmbedderRegistry) Close() error {
 	r.logger.Info("Closing lazy embedder registry")
 
 	// Stop cache and delete all cached models
@@ -475,7 +475,7 @@ func (r *LazyEmbedderRegistry) Close() error {
 }
 
 // Stats returns cache statistics
-func (r *LazyEmbedderRegistry) Stats() map[string]any {
+func (r *EmbedderRegistry) Stats() map[string]any {
 	metrics := r.cache.Metrics()
 
 	r.pinnedMu.RLock()

@@ -1,0 +1,326 @@
+// Copyright 2025 Antfly, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package termite
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/antflydb/termite/pkg/termite/lib/generation"
+	"github.com/antflydb/termite/pkg/termite/lib/hugot"
+	"github.com/antflydb/termite/pkg/termite/lib/modelregistry"
+	"github.com/jellydator/ttlcache/v3"
+	"go.uber.org/zap"
+)
+
+// GeneratorModelInfo holds metadata about a discovered generator model (not loaded yet)
+type GeneratorModelInfo struct {
+	Name      string
+	Path      string
+	ModelType string
+}
+
+// GeneratorRegistry manages generator models with lazy loading and TTL-based unloading
+type GeneratorRegistry struct {
+	modelsDir      string
+	sessionManager *hugot.SessionManager
+	logger         *zap.Logger
+
+	// Model discovery (paths only, not loaded)
+	discovered map[string]*GeneratorModelInfo
+	mu         sync.RWMutex
+
+	// Loaded models with TTL cache
+	cache *ttlcache.Cache[string, generation.Generator]
+
+	// Configuration
+	keepAlive       time.Duration
+	maxLoadedModels uint64
+}
+
+// GeneratorConfig configures the generator registry
+type GeneratorConfig struct {
+	ModelsDir       string
+	KeepAlive       time.Duration // How long to keep models loaded (0 = forever)
+	MaxLoadedModels uint64        // Max models in memory (0 = unlimited)
+}
+
+// NewGeneratorRegistry creates a new lazy-loading generator registry
+func NewGeneratorRegistry(
+	config GeneratorConfig,
+	sessionManager *hugot.SessionManager,
+	logger *zap.Logger,
+) (*GeneratorRegistry, error) {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+
+	keepAlive := config.KeepAlive
+	if keepAlive == 0 {
+		keepAlive = ttlcache.NoTTL // Never expire
+	}
+
+	registry := &GeneratorRegistry{
+		modelsDir:       config.ModelsDir,
+		sessionManager:  sessionManager,
+		logger:          logger,
+		discovered:      make(map[string]*GeneratorModelInfo),
+		keepAlive:       keepAlive,
+		maxLoadedModels: config.MaxLoadedModels,
+	}
+
+	// Configure TTL cache with LRU eviction
+	cacheOpts := []ttlcache.Option[string, generation.Generator]{
+		ttlcache.WithTTL[string, generation.Generator](keepAlive),
+	}
+
+	if config.MaxLoadedModels > 0 {
+		cacheOpts = append(cacheOpts,
+			ttlcache.WithCapacity[string, generation.Generator](config.MaxLoadedModels))
+	}
+
+	registry.cache = ttlcache.New(cacheOpts...)
+
+	// Set up eviction callback to close unloaded models
+	registry.cache.OnEviction(func(ctx context.Context, reason ttlcache.EvictionReason, item *ttlcache.Item[string, generation.Generator]) {
+		reasonStr := "unknown"
+		switch reason {
+		case ttlcache.EvictionReasonExpired:
+			reasonStr = "expired (keep-alive timeout)"
+		case ttlcache.EvictionReasonCapacityReached:
+			reasonStr = "capacity reached (LRU eviction)"
+		case ttlcache.EvictionReasonDeleted:
+			reasonStr = "manually deleted"
+		}
+		logger.Info("Evicting generator model from cache",
+			zap.String("model", item.Key()),
+			zap.String("reason", reasonStr))
+		if closer, ok := item.Value().(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				logger.Warn("Error closing evicted generator model",
+					zap.String("model", item.Key()),
+					zap.Error(err))
+			}
+		}
+	})
+
+	// Start cache cleanup goroutine
+	go registry.cache.Start()
+
+	// Discover models (but don't load them)
+	if err := registry.discoverModels(); err != nil {
+		registry.cache.Stop()
+		return nil, err
+	}
+
+	logger.Info("Lazy generator registry initialized",
+		zap.Int("models_discovered", len(registry.discovered)),
+		zap.Duration("keep_alive", keepAlive),
+		zap.Uint64("max_loaded_models", config.MaxLoadedModels))
+
+	return registry, nil
+}
+
+// discoverModels finds all generator models in the models directory without loading them
+func (r *GeneratorRegistry) discoverModels() error {
+	if r.modelsDir == "" {
+		r.logger.Info("No generator models directory configured")
+		return nil
+	}
+
+	// Check if directory exists
+	if _, err := os.Stat(r.modelsDir); os.IsNotExist(err) {
+		r.logger.Warn("Generator models directory does not exist",
+			zap.String("dir", r.modelsDir))
+		return nil
+	}
+
+	// Use discoverModelsInDir which handles owner/model structure
+	discovered, err := discoverModelsInDir(r.modelsDir, modelregistry.ModelTypeGenerator, r.logger)
+	if err != nil {
+		return fmt.Errorf("discovering generator models: %w", err)
+	}
+
+	for _, dm := range discovered {
+		modelPath := dm.Path
+		registryFullName := dm.FullName()
+
+		// Check for genai_config.json (preferred) or model.onnx in root or onnx/ subdirectory
+		if !isValidGeneratorModel(modelPath) {
+			// Also check onnx/ subdirectory
+			onnxSubpath := filepath.Join(modelPath, "onnx")
+			if isValidGeneratorModel(onnxSubpath) {
+				modelPath = onnxSubpath
+			} else {
+				r.logger.Debug("Skipping directory - not a valid generator model",
+					zap.String("dir", registryFullName))
+				continue
+			}
+		}
+
+		r.logger.Info("Discovered generator model (not loaded)",
+			zap.String("name", registryFullName),
+			zap.String("path", modelPath))
+
+		r.discovered[registryFullName] = &GeneratorModelInfo{
+			Name: registryFullName,
+			Path: modelPath,
+		}
+	}
+
+	r.logger.Info("Generator model discovery complete",
+		zap.Int("models_discovered", len(r.discovered)),
+		zap.Duration("keep_alive", r.keepAlive),
+		zap.Uint64("max_loaded_models", r.maxLoadedModels))
+
+	return nil
+}
+
+// Get returns a generator by name, loading it if necessary
+func (r *GeneratorRegistry) Get(modelName string) (generation.Generator, error) {
+	// Check cache first
+	if item := r.cache.Get(modelName); item != nil {
+		r.logger.Debug("Generator cache hit", zap.String("model", modelName))
+		return item.Value(), nil
+	}
+
+	// Check if model is discovered
+	r.mu.RLock()
+	info, ok := r.discovered[modelName]
+	r.mu.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("generator model not found: %s", modelName)
+	}
+
+	// Load the model
+	return r.loadModel(info)
+}
+
+// loadModel loads a generator model from disk
+func (r *GeneratorRegistry) loadModel(info *GeneratorModelInfo) (generation.Generator, error) {
+	r.logger.Info("Loading generator model on demand",
+		zap.String("model", info.Name),
+		zap.String("path", info.Path))
+
+	// Try to generate genai_config.json if needed
+	if err := generateGenaiConfig(info.Path, r.logger); err != nil {
+		r.logger.Warn("Failed to generate genai_config.json",
+			zap.String("name", info.Name),
+			zap.Error(err))
+	}
+
+	// Load the generator model
+	var model generation.Generator
+	var backendUsed hugot.BackendType
+	var loadErr error
+
+	if r.sessionManager != nil {
+		model, backendUsed, loadErr = generation.NewHugotGeneratorWithSessionManager(
+			info.Path, r.sessionManager, nil, r.logger.Named(info.Name))
+	} else {
+		model, loadErr = generation.NewHugotGeneratorWithSession(
+			info.Path, nil, r.logger.Named(info.Name))
+	}
+
+	if loadErr != nil {
+		return nil, fmt.Errorf("loading generator model %s: %w", info.Name, loadErr)
+	}
+
+	r.logger.Info("Successfully loaded generator model",
+		zap.String("name", info.Name),
+		zap.String("backend", string(backendUsed)))
+
+	// Add to cache
+	r.cache.Set(info.Name, model, r.keepAlive)
+
+	return model, nil
+}
+
+// List returns all available generator model names (discovered, not necessarily loaded)
+func (r *GeneratorRegistry) List() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	names := make([]string, 0, len(r.discovered))
+	for name := range r.discovered {
+		names = append(names, name)
+	}
+	return names
+}
+
+// ListLoaded returns only the currently loaded generator model names
+func (r *GeneratorRegistry) ListLoaded() []string {
+	keys := r.cache.Keys()
+	return keys
+}
+
+// IsLoaded returns whether a model is currently loaded in memory
+func (r *GeneratorRegistry) IsLoaded(modelName string) bool {
+	return r.cache.Has(modelName)
+}
+
+// Preload loads specified models at startup to avoid first-request latency
+func (r *GeneratorRegistry) Preload(modelNames []string) error {
+	if len(modelNames) == 0 {
+		return nil
+	}
+
+	r.logger.Info("Preloading generator models", zap.Strings("models", modelNames))
+
+	var loaded, failed int
+	for _, name := range modelNames {
+		if _, err := r.Get(name); err != nil {
+			r.logger.Warn("Failed to preload generator model",
+				zap.String("model", name),
+				zap.Error(err))
+			failed++
+		} else {
+			r.logger.Info("Preloaded generator model",
+				zap.String("model", name))
+			loaded++
+		}
+	}
+
+	r.logger.Info("Generator preloading complete",
+		zap.Int("loaded", loaded),
+		zap.Int("failed", failed))
+
+	if failed > 0 && loaded == 0 {
+		return fmt.Errorf("all %d generator models failed to preload", failed)
+	}
+
+	return nil
+}
+
+// PreloadAll loads all discovered models (for eager loading mode)
+func (r *GeneratorRegistry) PreloadAll() error {
+	return r.Preload(r.List())
+}
+
+// Close stops the cache and unloads all models
+func (r *GeneratorRegistry) Close() error {
+	r.logger.Info("Closing lazy generator registry")
+
+	// Stop cache and delete all cached models
+	r.cache.Stop()
+	r.cache.DeleteAll()
+
+	return nil
+}

@@ -322,6 +322,20 @@ examples: ## Show example usage.
 	@echo "4. View pool details:"
 	@echo "   kubectl describe termitepool read-heavy-embedders -n termite-operator-namespace"
 
+##@ Omni Dependencies
+
+# Paths for omni build dependencies (can be overridden)
+# Use absolute paths so they work from subdirectories (e.g., e2e/)
+ONNXRUNTIME_ROOT ?= $(CURDIR)/onnxruntime
+PJRT_ROOT ?= $(CURDIR)/pjrt
+
+.PHONY: download-omni-deps
+download-omni-deps: ## Download ONNX Runtime and PJRT for omni builds.
+	@echo "Downloading ONNX Runtime..."
+	ONNXRUNTIME_ROOT=$(ONNXRUNTIME_ROOT) ./scripts/download-onnxruntime.sh
+	@echo "Downloading PJRT..."
+	PJRT_ROOT=$(PJRT_ROOT) ./scripts/download-pjrt.sh
+
 ##@ E2E Testing
 
 # Detect OS and architecture for library paths
@@ -341,36 +355,17 @@ else
     endif
 endif
 
-.PHONY: e2e-deps
-e2e-deps: ## Download ONNX Runtime and PJRT for omni builds.
-	@echo "Downloading ONNX Runtime..."
-	./scripts/download-onnxruntime.sh
-	@echo "Downloading PJRT..."
-	./scripts/download-pjrt.sh
-
 .PHONY: e2e
-e2e: e2e-deps ## Run E2E tests with omni build (ONNX + XLA).
+e2e: download-omni-deps ## Run E2E tests with omni build (ONNX + XLA).
 	@echo "Running E2E tests with omni build..."
 	@echo "This will download the CLIP model (~500MB) on first run."
 	@echo "Platform: $(PLATFORM)"
-	export ONNXRUNTIME_ROOT=$$(pwd)/onnxruntime && \
-	export PJRT_ROOT=$$(pwd)/pjrt && \
+	export ONNXRUNTIME_ROOT=$(ONNXRUNTIME_ROOT) && \
+	export PJRT_ROOT=$(PJRT_ROOT) && \
 	export CGO_ENABLED=1 && \
-	export LIBRARY_PATH=$$(pwd)/onnxruntime/$(PLATFORM)/lib:$$LIBRARY_PATH && \
-	export LD_LIBRARY_PATH=$$(pwd)/onnxruntime/$(PLATFORM)/lib:$$LD_LIBRARY_PATH && \
-	export DYLD_LIBRARY_PATH=$$(pwd)/onnxruntime/$(PLATFORM)/lib:$$DYLD_LIBRARY_PATH && \
+	export LIBRARY_PATH=$(ONNXRUNTIME_ROOT)/$(PLATFORM)/lib:$$LIBRARY_PATH && \
+	export LD_LIBRARY_PATH=$(ONNXRUNTIME_ROOT)/$(PLATFORM)/lib:$$LD_LIBRARY_PATH && \
+	export DYLD_LIBRARY_PATH=$(ONNXRUNTIME_ROOT)/$(PLATFORM)/lib:$$DYLD_LIBRARY_PATH && \
 	cd e2e && go mod tidy && \
 	go test -v -tags="onnx,ORT,xla,XLA" -timeout 15m ./...
 
-.PHONY: e2e-onnx
-e2e-onnx: ## Run E2E tests with ONNX only (no XLA).
-	@echo "Running E2E tests with ONNX build..."
-	@echo "Platform: $(PLATFORM)"
-	./scripts/download-onnxruntime.sh
-	export ONNXRUNTIME_ROOT=$$(pwd)/onnxruntime && \
-	export CGO_ENABLED=1 && \
-	export LIBRARY_PATH=$$(pwd)/onnxruntime/$(PLATFORM)/lib:$$LIBRARY_PATH && \
-	export LD_LIBRARY_PATH=$$(pwd)/onnxruntime/$(PLATFORM)/lib:$$LD_LIBRARY_PATH && \
-	export DYLD_LIBRARY_PATH=$$(pwd)/onnxruntime/$(PLATFORM)/lib:$$DYLD_LIBRARY_PATH && \
-	cd e2e && go mod tidy && \
-	go test -v -tags="onnx,ORT" -timeout 15m ./...

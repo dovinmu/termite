@@ -32,11 +32,13 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// Ensure HugotGenerator implements the Generator and StreamingGenerator interfaces
+// Ensure HugotGenerator implements the Generator, StreamingGenerator, and ToolSupporter interfaces
 var _ Generator = (*HugotGenerator)(nil)
 var _ StreamingGenerator = (*HugotGenerator)(nil)
+var _ ToolSupporter = (*HugotGenerator)(nil)
 var _ Generator = (*PooledHugotGenerator)(nil)
 var _ StreamingGenerator = (*PooledHugotGenerator)(nil)
+var _ ToolSupporter = (*PooledHugotGenerator)(nil)
 
 // toHugotMessages converts internal Message types to Hugot's backends.Message format.
 // Supports multimodal content via the Parts field.
@@ -101,9 +103,37 @@ func toHugotMessages(messages []Message, imageToken string) []backends.Message {
 
 // specialTokensMap represents the structure of special_tokens_map.json
 type specialTokensMap struct {
-	BOIToken    string `json:"boi_token"`    // Begin of image token (e.g., "<start_of_image>")
-	EOIToken    string `json:"eoi_token"`    // End of image token (e.g., "<end_of_image>")
-	ImageToken  string `json:"image_token"`  // Image soft token (e.g., "<image_soft_token>")
+	BOIToken   string `json:"boi_token"`   // Begin of image token (e.g., "<start_of_image>")
+	EOIToken   string `json:"eoi_token"`   // End of image token (e.g., "<end_of_image>")
+	ImageToken string `json:"image_token"` // Image soft token (e.g., "<image_soft_token>")
+}
+
+// GenAIConfig represents the model's genai_config.json with Termite extensions.
+type GenAIConfig struct {
+	// Standard ONNX Runtime GenAI fields
+	Model struct {
+		Type      string `json:"type"`
+		VocabSize int    `json:"vocab_size"`
+	} `json:"model"`
+
+	// Termite extension: tool calling format
+	ToolCallFormat string `json:"tool_call_format,omitempty"` // "functiongemma", "json", "hermes", etc.
+}
+
+// readGenAIConfig reads the genai_config.json file from the model directory.
+func readGenAIConfig(modelPath string) *GenAIConfig {
+	configPath := filepath.Join(modelPath, "genai_config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil
+	}
+
+	var config GenAIConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil
+	}
+
+	return &config
 }
 
 // readImageToken reads the image placeholder token from the model's special_tokens_map.json.
@@ -129,11 +159,13 @@ func readImageToken(modelPath string) string {
 
 // HugotGenerator wraps a Hugot TextGenerationPipeline for LLM inference.
 type HugotGenerator struct {
-	session       *khugot.Session
-	pipeline      *pipelines.TextGenerationPipeline // streaming-enabled pipeline
-	logger        *zap.Logger
-	sessionShared bool   // true if session is shared and shouldn't be destroyed
-	imageToken    string // image placeholder token from model's special_tokens_map.json
+	session        *khugot.Session
+	pipeline       *pipelines.TextGenerationPipeline // streaming-enabled pipeline
+	logger         *zap.Logger
+	sessionShared  bool       // true if session is shared and shouldn't be destroyed
+	imageToken     string     // image placeholder token from model's special_tokens_map.json
+	toolParser     ToolParser // tool call parser (from genai_config.json)
+	toolCallFormat string     // the tool call format name (e.g., "functiongemma")
 }
 
 // NewHugotGenerator creates a new generator using the Hugot runtime.
@@ -203,13 +235,47 @@ func NewHugotGeneratorWithSession(modelPath string, sharedSession *khugot.Sessio
 		logger.Info("Loaded image token from model config", zap.String("imageToken", imageToken))
 	}
 
+	// Read genai_config.json for tool calling support
+	var toolParser ToolParser
+	var toolCallFormat string
+	if config := readGenAIConfig(modelPath); config != nil && config.ToolCallFormat != "" {
+		toolCallFormat = config.ToolCallFormat
+		var err error
+		toolParser, err = GetToolParser(config.ToolCallFormat, modelPath)
+		if err != nil {
+			logger.Warn("Failed to load tool parser",
+				zap.String("format", config.ToolCallFormat),
+				zap.Error(err))
+		} else {
+			logger.Info("Loaded tool parser from model config",
+				zap.String("format", config.ToolCallFormat))
+		}
+	}
+
 	return &HugotGenerator{
-		session:       session,
-		pipeline:      pipeline,
-		logger:        logger,
-		sessionShared: sessionShared,
-		imageToken:    imageToken,
+		session:        session,
+		pipeline:       pipeline,
+		logger:         logger,
+		sessionShared:  sessionShared,
+		imageToken:     imageToken,
+		toolParser:     toolParser,
+		toolCallFormat: toolCallFormat,
 	}, nil
+}
+
+// SupportsTools returns true if this generator supports tool calling.
+func (g *HugotGenerator) SupportsTools() bool {
+	return g.toolParser != nil
+}
+
+// ToolParser returns the tool parser for this generator, or nil if not supported.
+func (g *HugotGenerator) ToolParser() ToolParser {
+	return g.toolParser
+}
+
+// ToolCallFormat returns the tool call format name (e.g., "functiongemma").
+func (g *HugotGenerator) ToolCallFormat() string {
+	return g.toolCallFormat
 }
 
 // convertMessages converts internal Message types to Hugot's backends.Message format
@@ -275,12 +341,31 @@ func NewHugotGeneratorWithSessionManager(modelPath string, sessionManager *hugot
 		logger.Info("Loaded image token from model config", zap.String("imageToken", imageToken))
 	}
 
+	// Read genai_config.json for tool calling support
+	var toolParser ToolParser
+	var toolCallFormat string
+	if config := readGenAIConfig(modelPath); config != nil && config.ToolCallFormat != "" {
+		toolCallFormat = config.ToolCallFormat
+		var err error
+		toolParser, err = GetToolParser(config.ToolCallFormat, modelPath)
+		if err != nil {
+			logger.Warn("Failed to load tool parser",
+				zap.String("format", config.ToolCallFormat),
+				zap.Error(err))
+		} else {
+			logger.Info("Loaded tool parser from model config",
+				zap.String("format", config.ToolCallFormat))
+		}
+	}
+
 	return &HugotGenerator{
-		session:       session,
-		pipeline:      pipeline,
-		logger:        logger,
-		sessionShared: true, // SessionManager-provided sessions are always shared
-		imageToken:    imageToken,
+		session:        session,
+		pipeline:       pipeline,
+		logger:         logger,
+		sessionShared:  true, // SessionManager-provided sessions are always shared
+		imageToken:     imageToken,
+		toolParser:     toolParser,
+		toolCallFormat: toolCallFormat,
 	}, backendUsed, nil
 }
 
@@ -416,14 +501,16 @@ func (g *HugotGenerator) Close() error {
 // PooledHugotGenerator manages multiple ONNX pipelines for concurrent text generation.
 // Each request acquires a pipeline slot via semaphore, enabling true parallelism.
 type PooledHugotGenerator struct {
-	session       *khugot.Session
-	pipelines     []*pipelines.TextGenerationPipeline
-	sem           *semaphore.Weighted
-	nextPipeline  atomic.Uint64
-	logger        *zap.Logger
-	sessionShared bool
-	poolSize      int
-	imageToken    string // image placeholder token from model's special_tokens_map.json
+	session        *khugot.Session
+	pipelines      []*pipelines.TextGenerationPipeline
+	sem            *semaphore.Weighted
+	nextPipeline   atomic.Uint64
+	logger         *zap.Logger
+	sessionShared  bool
+	poolSize       int
+	imageToken     string     // image placeholder token from model's special_tokens_map.json
+	toolParser     ToolParser // tool call parser (from genai_config.json)
+	toolCallFormat string     // the tool call format name (e.g., "functiongemma")
 }
 
 // NewPooledHugotGenerator creates a new pooled generator using the Hugot runtime.
@@ -505,15 +592,49 @@ func NewPooledHugotGeneratorWithSession(modelPath string, poolSize int, sharedSe
 		logger.Info("Loaded image token from model config", zap.String("imageToken", imageToken))
 	}
 
+	// Read genai_config.json for tool calling support
+	var toolParser ToolParser
+	var toolCallFormat string
+	if config := readGenAIConfig(modelPath); config != nil && config.ToolCallFormat != "" {
+		toolCallFormat = config.ToolCallFormat
+		var err error
+		toolParser, err = GetToolParser(config.ToolCallFormat, modelPath)
+		if err != nil {
+			logger.Warn("Failed to load tool parser",
+				zap.String("format", config.ToolCallFormat),
+				zap.Error(err))
+		} else {
+			logger.Info("Loaded tool parser from model config",
+				zap.String("format", config.ToolCallFormat))
+		}
+	}
+
 	return &PooledHugotGenerator{
-		session:       session,
-		pipelines:     pipelinesList,
-		sem:           semaphore.NewWeighted(int64(poolSize)),
-		logger:        logger,
-		sessionShared: sessionShared,
-		poolSize:      poolSize,
-		imageToken:    imageToken,
+		session:        session,
+		pipelines:      pipelinesList,
+		sem:            semaphore.NewWeighted(int64(poolSize)),
+		logger:         logger,
+		sessionShared:  sessionShared,
+		poolSize:       poolSize,
+		imageToken:     imageToken,
+		toolParser:     toolParser,
+		toolCallFormat: toolCallFormat,
 	}, nil
+}
+
+// SupportsTools returns true if this generator supports tool calling.
+func (p *PooledHugotGenerator) SupportsTools() bool {
+	return p.toolParser != nil
+}
+
+// ToolParser returns the tool parser for this generator, or nil if not supported.
+func (p *PooledHugotGenerator) ToolParser() ToolParser {
+	return p.toolParser
+}
+
+// ToolCallFormat returns the tool call format name (e.g., "functiongemma").
+func (p *PooledHugotGenerator) ToolCallFormat() string {
+	return p.toolCallFormat
 }
 
 // convertMessages converts internal Message types to Hugot's backends.Message format

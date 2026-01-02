@@ -427,6 +427,41 @@ type GenerateConfig struct {
 	Temperature float32
 	TopP        float32
 	TopK        int
+	Tools       []oapi.Tool
+	ToolChoice  oapi.ToolChoice
+}
+
+// ToolChoiceAuto returns a ToolChoice that lets the model decide whether to call a tool.
+func ToolChoiceAuto() oapi.ToolChoice {
+	var tc oapi.ToolChoice
+	_ = tc.FromToolChoice0(oapi.ToolChoice0Auto)
+	return tc
+}
+
+// ToolChoiceNone returns a ToolChoice that prevents the model from calling any tools.
+func ToolChoiceNone() oapi.ToolChoice {
+	var tc oapi.ToolChoice
+	_ = tc.FromToolChoice0(oapi.ToolChoice0None)
+	return tc
+}
+
+// ToolChoiceRequired returns a ToolChoice that forces the model to call at least one tool.
+func ToolChoiceRequired() oapi.ToolChoice {
+	var tc oapi.ToolChoice
+	_ = tc.FromToolChoice0(oapi.ToolChoice0Required)
+	return tc
+}
+
+// ToolChoiceFunction returns a ToolChoice that forces the model to call a specific function.
+func ToolChoiceFunction(name string) oapi.ToolChoice {
+	var tc oapi.ToolChoice
+	_ = tc.FromToolChoice1(oapi.ToolChoice1{
+		Type: oapi.ToolChoice1TypeFunction,
+		Function: struct {
+			Name string `json:"name"`
+		}{Name: name},
+	})
+	return tc
 }
 
 // Generate generates text using an LLM model (non-streaming).
@@ -449,6 +484,10 @@ func (c *TermiteClient) Generate(ctx context.Context, model string, messages []o
 		if config.TopK > 0 {
 			req.TopK = config.TopK
 		}
+		if len(config.Tools) > 0 {
+			req.Tools = config.Tools
+		}
+		req.ToolChoice = config.ToolChoice
 	}
 
 	resp, err := c.client.GenerateContentWithResponse(ctx, req)

@@ -8,7 +8,7 @@ replace github.com/gomlx/onnx-gomlx => github.com/timkaye11/onnx-gomlx v0.0.0-20
 
 replace github.com/knights-analytics/hugot => github.com/ajroetker/hugot v0.0.0-20260101005223-9b602a8e2c35
 
-replace github.com/knights-analytics/ortgenai => github.com/ajroetker/ortgenai v0.0.0-20260101101217-6423af4e4878
+replace github.com/knights-analytics/ortgenai => github.com/ajroetker/ortgenai v0.0.0-20260102002309-90abcfc27670
 
 require (
 	github.com/antflydb/antfly-go/libaf v0.0.0-20251223084332-a4c929e52574
