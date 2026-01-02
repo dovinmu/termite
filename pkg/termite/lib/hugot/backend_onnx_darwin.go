@@ -72,8 +72,11 @@ func (b *onnxDarwinBackend) Priority() int {
 }
 
 func (b *onnxDarwinBackend) CreateSession(opts ...options.WithOption) (*hugot.Session, error) {
+	// Build CoreML configuration based on GPU mode
+	coremlConfig := b.getCoreMLConfig()
+
 	// Prepend CoreML provider - user options can override if needed
-	coremlOpts := []options.WithOption{options.WithCoreML(nil)}
+	coremlOpts := []options.WithOption{options.WithCoreML(coremlConfig)}
 
 	// Check for custom library path from environment
 	if libPath := getOnnxLibraryPath(); libPath != "" {
@@ -82,6 +85,37 @@ func (b *onnxDarwinBackend) CreateSession(opts ...options.WithOption) (*hugot.Se
 
 	opts = append(coremlOpts, opts...)
 	return hugot.NewORTSession(opts...)
+}
+
+// getCoreMLConfig returns the CoreML configuration based on the current GPU mode.
+// Maps GPUMode to CoreML MLComputeUnits:
+//   - GPUModeAuto/GPUModeCoreML: "ALL" (Neural Engine > GPU > CPU)
+//   - GPUModeOff: "CPUOnly"
+//   - GPUModeCuda/GPUModeTpu: "ALL" (not applicable on Mac, fallback to best available)
+func (b *onnxDarwinBackend) getCoreMLConfig() map[string]string {
+	mode := b.GetGPUMode()
+
+	config := make(map[string]string)
+
+	// Map GPUMode to MLComputeUnits
+	switch mode {
+	case GPUModeOff:
+		config["MLComputeUnits"] = "CPUOnly"
+	case GPUModeAuto, GPUModeCoreML, GPUModeCuda, GPUModeTpu, "":
+		// Use ALL to let CoreML pick the best available hardware
+		// (Neural Engine > GPU > CPU based on model and operation)
+		config["MLComputeUnits"] = "ALL"
+	default:
+		config["MLComputeUnits"] = "ALL"
+	}
+
+	// Enable compute plan profiling when TERMITE_DEBUG is set
+	// This logs which hardware (ANE/GPU/CPU) executes each operation
+	if os.Getenv("TERMITE_DEBUG") != "" {
+		config["ProfileComputePlan"] = "1"
+	}
+
+	return config
 }
 
 // getOnnxLibraryPath returns the directory containing libonnxruntime.dylib from environment.
