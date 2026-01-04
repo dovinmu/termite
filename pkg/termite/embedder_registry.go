@@ -42,8 +42,8 @@ type ModelInfo struct {
 	Variants     []string // Available variant IDs (e.g., ["f16", "i8"])
 }
 
-// LazyEmbedderRegistry manages embedding models with lazy loading and TTL-based unloading
-type LazyEmbedderRegistry struct {
+// EmbedderRegistry manages embedding models with lazy loading and TTL-based unloading
+type EmbedderRegistry struct {
 	modelsDir      string
 	sessionManager *hugot.SessionManager
 	logger         *zap.Logger
@@ -62,21 +62,23 @@ type LazyEmbedderRegistry struct {
 	// Configuration
 	keepAlive       time.Duration
 	maxLoadedModels uint64
+	poolSize        int
 }
 
-// LazyEmbedderConfig configures the lazy embedder registry
-type LazyEmbedderConfig struct {
+// EmbedderConfig configures the embedder registry
+type EmbedderConfig struct {
 	ModelsDir       string
 	KeepAlive       time.Duration // How long to keep models loaded (0 = forever)
 	MaxLoadedModels uint64        // Max models in memory (0 = unlimited)
+	PoolSize        int           // Number of concurrent pipelines per model (0 = default)
 }
 
-// NewLazyEmbedderRegistry creates a new lazy-loading embedder registry
-func NewLazyEmbedderRegistry(
-	config LazyEmbedderConfig,
+// NewEmbedderRegistry creates a new lazy-loading embedder registry
+func NewEmbedderRegistry(
+	config EmbedderConfig,
 	sessionManager *hugot.SessionManager,
 	logger *zap.Logger,
-) (*LazyEmbedderRegistry, error) {
+) (*EmbedderRegistry, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -86,7 +88,7 @@ func NewLazyEmbedderRegistry(
 		keepAlive = ttlcache.NoTTL // Never expire
 	}
 
-	registry := &LazyEmbedderRegistry{
+	registry := &EmbedderRegistry{
 		modelsDir:       config.ModelsDir,
 		sessionManager:  sessionManager,
 		logger:          logger,
@@ -94,6 +96,7 @@ func NewLazyEmbedderRegistry(
 		pinned:          make(map[string]embeddings.Embedder),
 		keepAlive:       keepAlive,
 		maxLoadedModels: config.MaxLoadedModels,
+		poolSize:        config.PoolSize,
 	}
 
 	// Configure TTL cache with LRU eviction
@@ -110,18 +113,26 @@ func NewLazyEmbedderRegistry(
 	registry.cache = ttlcache.New(cacheOpts...)
 
 	// Set up eviction callback to close models
+	// Note: Only close on TTL expiration or capacity eviction, not on manual deletion
+	// (manual deletion during Close() handles cleanup synchronously)
 	registry.cache.OnEviction(func(ctx context.Context, reason ttlcache.EvictionReason, item *ttlcache.Item[string, embeddings.Embedder]) {
 		modelName := item.Key()
 		embedder := item.Value()
 
-		// Check if model was moved to pinned (don't close in that case)
-		registry.pinnedMu.RLock()
-		isPinned := registry.pinned[modelName] == embedder
-		registry.pinnedMu.RUnlock()
+		// Skip closing on manual deletion - Close() handles cleanup synchronously
+		if reason == ttlcache.EvictionReasonDeleted {
+			// Check if model was moved to pinned (don't close in that case)
+			registry.pinnedMu.RLock()
+			isPinned := registry.pinned[modelName] == embedder
+			registry.pinnedMu.RUnlock()
 
-		if isPinned {
-			logger.Debug("Model moved to pinned, skipping close",
-				zap.String("model", modelName))
+			if isPinned {
+				logger.Debug("Model moved to pinned, skipping close",
+					zap.String("model", modelName))
+			} else {
+				logger.Debug("Embedder removed from cache (cleanup handled separately)",
+					zap.String("model", modelName))
+			}
 			return
 		}
 
@@ -131,8 +142,6 @@ func NewLazyEmbedderRegistry(
 			reasonStr = "expired (keep-alive timeout)"
 		case ttlcache.EvictionReasonCapacityReached:
 			reasonStr = "capacity reached (LRU eviction)"
-		case ttlcache.EvictionReasonDeleted:
-			reasonStr = "manually deleted"
 		}
 
 		logger.Info("Unloading embedder model",
@@ -163,7 +172,7 @@ func NewLazyEmbedderRegistry(
 
 // discoverModels scans the models directory and records available models
 // Supports owner/model-name directory structure (e.g., embedders/BAAI/bge-small-en-v1.5/)
-func (r *LazyEmbedderRegistry) discoverModels() error {
+func (r *EmbedderRegistry) discoverModels() error {
 	if r.modelsDir == "" {
 		r.logger.Info("No embedder models directory configured")
 		return nil
@@ -181,12 +190,51 @@ func (r *LazyEmbedderRegistry) discoverModels() error {
 		return fmt.Errorf("discovering embedder models: %w", err)
 	}
 
-	poolSize := min(runtime.NumCPU(), 4)
+	poolSize := r.poolSize
+	if poolSize <= 0 {
+		poolSize = min(runtime.NumCPU(), 4)
+	}
 
 	for _, dm := range discovered {
 		modelPath := dm.Path
 		registryFullName := dm.FullName()
 		variants := dm.Variants
+
+		// Check if this is a multimodal (CLIP-style) model
+		hasMultimodalStd, hasMultimodalQt := isMultimodalModel(modelPath)
+		if hasMultimodalStd || hasMultimodalQt {
+			r.logger.Info("Discovered multimodal embedder model (not loaded)",
+				zap.String("name", registryFullName),
+				zap.String("path", modelPath),
+				zap.Bool("has_standard", hasMultimodalStd),
+				zap.Bool("has_quantized", hasMultimodalQt))
+
+			// Register standard precision multimodal model
+			if hasMultimodalStd {
+				r.discovered[registryFullName] = &ModelInfo{
+					Name:         registryFullName,
+					Path:         modelPath,
+					OnnxFilename: "", // CLIP uses multiple files, not a single ONNX
+					PoolSize:     poolSize,
+					ModelType:    "clip",
+					Variants:     []string{"default"},
+				}
+			}
+
+			// Register quantized multimodal model with suffix
+			if hasMultimodalQt {
+				quantizedName := registryFullName + "-i8-qt"
+				r.discovered[quantizedName] = &ModelInfo{
+					Name:         quantizedName,
+					Path:         modelPath,
+					OnnxFilename: "", // CLIP uses multiple files, not a single ONNX
+					PoolSize:     poolSize,
+					ModelType:    "clip-quantized",
+					Variants:     []string{"quantized"},
+				}
+			}
+			continue // Skip standard embedder handling
+		}
 
 		if len(variants) == 0 {
 			continue
@@ -234,7 +282,7 @@ func (r *LazyEmbedderRegistry) discoverModels() error {
 }
 
 // Get returns an embedder by model name, loading it if necessary
-func (r *LazyEmbedderRegistry) Get(modelName string) (embeddings.Embedder, error) {
+func (r *EmbedderRegistry) Get(modelName string) (embeddings.Embedder, error) {
 	// Check if model is pinned (never evicted)
 	r.pinnedMu.RLock()
 	if embedder, ok := r.pinned[modelName]; ok {
@@ -266,7 +314,7 @@ func (r *LazyEmbedderRegistry) Get(modelName string) (embeddings.Embedder, error
 }
 
 // loadModel loads a model on demand
-func (r *LazyEmbedderRegistry) loadModel(info *ModelInfo) (embeddings.Embedder, error) {
+func (r *EmbedderRegistry) loadModel(info *ModelInfo) (embeddings.Embedder, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -278,20 +326,50 @@ func (r *LazyEmbedderRegistry) loadModel(info *ModelInfo) (embeddings.Embedder, 
 	r.logger.Info("Loading embedder model on demand",
 		zap.String("model", info.Name),
 		zap.String("path", info.Path),
+		zap.String("model_type", info.ModelType),
 		zap.String("onnx_filename", info.OnnxFilename),
 		zap.Int("pool_size", info.PoolSize))
 
-	embedder, backendUsed, err := termembeddings.NewPooledHugotEmbedderWithSessionManager(
-		info.Path,
-		info.OnnxFilename,
-		info.PoolSize,
-		r.sessionManager,
-		nil, // modelBackends - use default priority
-		r.logger.Named(info.Name),
-	)
+	var embedder embeddings.Embedder
+	var backendUsed hugot.BackendType
+	var err error
+
+	// Handle different model types
+	switch info.ModelType {
+	case "clip":
+		// Load standard precision CLIP multimodal model
+		embedder, backendUsed, err = termembeddings.NewHugotCLIPEmbedderWithSessionManager(
+			info.Path,
+			false, // not quantized
+			r.sessionManager,
+			nil, // modelBackends - use default priority
+			r.logger.Named(info.Name),
+		)
+	case "clip-quantized":
+		// Load quantized CLIP multimodal model
+		embedder, backendUsed, err = termembeddings.NewHugotCLIPEmbedderWithSessionManager(
+			info.Path,
+			true, // quantized
+			r.sessionManager,
+			nil, // modelBackends - use default priority
+			r.logger.Named(info.Name),
+		)
+	default:
+		// Standard pooled embedder
+		embedder, backendUsed, err = termembeddings.NewPooledHugotEmbedderWithSessionManager(
+			info.Path,
+			info.OnnxFilename,
+			info.PoolSize,
+			r.sessionManager,
+			nil, // modelBackends - use default priority
+			r.logger.Named(info.Name),
+		)
+	}
+
 	if err != nil {
 		r.logger.Error("Failed to load embedder model",
 			zap.String("model", info.Name),
+			zap.String("model_type", info.ModelType),
 			zap.Error(err))
 		return nil, fmt.Errorf("loading embedder model %s: %w", info.Name, err)
 	}
@@ -301,6 +379,7 @@ func (r *LazyEmbedderRegistry) loadModel(info *ModelInfo) (embeddings.Embedder, 
 
 	r.logger.Info("Successfully loaded embedder model",
 		zap.String("model", info.Name),
+		zap.String("model_type", info.ModelType),
 		zap.String("backend", string(backendUsed)),
 		zap.Duration("keep_alive", r.keepAlive))
 
@@ -308,7 +387,7 @@ func (r *LazyEmbedderRegistry) loadModel(info *ModelInfo) (embeddings.Embedder, 
 }
 
 // Touch refreshes the TTL for a model (call after each use to implement Ollama-style keep-alive)
-func (r *LazyEmbedderRegistry) Touch(modelName string) {
+func (r *EmbedderRegistry) Touch(modelName string) {
 	if item := r.cache.Get(modelName); item != nil {
 		// Get refreshes TTL automatically
 		r.logger.Debug("Refreshed model keep-alive",
@@ -317,7 +396,7 @@ func (r *LazyEmbedderRegistry) Touch(modelName string) {
 }
 
 // List returns all available (discovered) model names
-func (r *LazyEmbedderRegistry) List() []string {
+func (r *EmbedderRegistry) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -329,7 +408,7 @@ func (r *LazyEmbedderRegistry) List() []string {
 }
 
 // ListLoaded returns currently loaded model names (from cache and pinned)
-func (r *LazyEmbedderRegistry) ListLoaded() []string {
+func (r *EmbedderRegistry) ListLoaded() []string {
 	// Get cache keys
 	keys := r.cache.Keys()
 
@@ -349,7 +428,7 @@ func (r *LazyEmbedderRegistry) ListLoaded() []string {
 }
 
 // IsLoaded checks if a model is currently loaded (in cache or pinned)
-func (r *LazyEmbedderRegistry) IsLoaded(modelName string) bool {
+func (r *EmbedderRegistry) IsLoaded(modelName string) bool {
 	r.pinnedMu.RLock()
 	isPinned := r.pinned[modelName] != nil
 	r.pinnedMu.RUnlock()
@@ -358,7 +437,7 @@ func (r *LazyEmbedderRegistry) IsLoaded(modelName string) bool {
 
 // Unload explicitly unloads a model (triggers eviction callback)
 // Note: Pinned models cannot be unloaded via this method.
-func (r *LazyEmbedderRegistry) Unload(modelName string) {
+func (r *EmbedderRegistry) Unload(modelName string) {
 	r.pinnedMu.RLock()
 	isPinned := r.pinned[modelName] != nil
 	r.pinnedMu.RUnlock()
@@ -374,7 +453,7 @@ func (r *LazyEmbedderRegistry) Unload(modelName string) {
 // Pin marks a model as pinned (never evicted). If the model is already loaded
 // in the cache, it is moved to the pinned map. If not loaded, it will be loaded
 // first. Pinned models survive TTL expiration and LRU eviction.
-func (r *LazyEmbedderRegistry) Pin(modelName string) error {
+func (r *EmbedderRegistry) Pin(modelName string) error {
 	// Check if already pinned
 	r.pinnedMu.RLock()
 	if r.pinned[modelName] != nil {
@@ -408,14 +487,14 @@ func (r *LazyEmbedderRegistry) Pin(modelName string) error {
 }
 
 // IsPinned returns true if a model is pinned (never evicted)
-func (r *LazyEmbedderRegistry) IsPinned(modelName string) bool {
+func (r *EmbedderRegistry) IsPinned(modelName string) bool {
 	r.pinnedMu.RLock()
 	defer r.pinnedMu.RUnlock()
 	return r.pinned[modelName] != nil
 }
 
 // Preload loads specified models at startup to avoid first-request latency
-func (r *LazyEmbedderRegistry) Preload(modelNames []string) error {
+func (r *EmbedderRegistry) Preload(modelNames []string) error {
 	if len(modelNames) == 0 {
 		return nil
 	}
@@ -448,11 +527,29 @@ func (r *LazyEmbedderRegistry) Preload(modelNames []string) error {
 }
 
 // Close stops the cache and unloads all models (including pinned)
-func (r *LazyEmbedderRegistry) Close() error {
+func (r *EmbedderRegistry) Close() error {
 	r.logger.Info("Closing lazy embedder registry")
 
-	// Stop cache and delete all cached models
+	// Stop cache first to prevent new evictions
 	r.cache.Stop()
+
+	// Close all cached models synchronously (don't rely on async eviction callbacks)
+	for _, key := range r.cache.Keys() {
+		if item := r.cache.Get(key); item != nil {
+			embedder := item.Value()
+			r.logger.Debug("Closing cached embedder",
+				zap.String("model", key))
+			if closer, ok := embedder.(interface{ Close() error }); ok {
+				if err := closer.Close(); err != nil {
+					r.logger.Warn("Error closing embedder",
+						zap.String("model", key),
+						zap.Error(err))
+				}
+			}
+		}
+	}
+
+	// Clear the cache (eviction callbacks won't close since reason is EvictionReasonDeleted)
 	r.cache.DeleteAll()
 
 	// Close all pinned models
@@ -475,7 +572,7 @@ func (r *LazyEmbedderRegistry) Close() error {
 }
 
 // Stats returns cache statistics
-func (r *LazyEmbedderRegistry) Stats() map[string]any {
+func (r *EmbedderRegistry) Stats() map[string]any {
 	metrics := r.cache.Metrics()
 
 	r.pinnedMu.RLock()

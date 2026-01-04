@@ -42,10 +42,10 @@ import (
 // - With unlimited JIT cache: memory grows with each new shape
 // - With limited JIT cache: memory stabilizes after cache fills
 func TestMemoryGrowthWithVaryingShapes(t *testing.T) {
+	// Ensure embedder model is downloaded (lazy download)
+	ensureRegistryModel(t, "BAAI/bge-small-en-v1.5", ModelTypeEmbedder)
+
 	embedderModelsDir := getEmbedderModelsDir()
-	if _, err := os.Stat(embedderModelsDir); os.IsNotExist(err) {
-		t.Skipf("Embedder models directory not found: %s", embedderModelsDir)
-	}
 
 	logger := zaptest.NewLogger(t)
 
@@ -54,8 +54,8 @@ func TestMemoryGrowthWithVaryingShapes(t *testing.T) {
 	defer sm.Close()
 
 	// Create embedder registry
-	registry, err := termite.NewLazyEmbedderRegistry(
-		termite.LazyEmbedderConfig{
+	registry, err := termite.NewEmbedderRegistry(
+		termite.EmbedderConfig{
 			ModelsDir:       embedderModelsDir,
 			KeepAlive:       5 * time.Minute,
 			MaxLoadedModels: 1,
@@ -133,18 +133,18 @@ func TestMemoryGrowthWithVaryingShapes(t *testing.T) {
 // With proper JIT caching, repeated inference with the same shape should
 // NOT grow memory after the initial compilation.
 func TestMemoryWithRepeatedShapes(t *testing.T) {
+	// Ensure embedder model is downloaded (lazy download)
+	ensureRegistryModel(t, "BAAI/bge-small-en-v1.5", ModelTypeEmbedder)
+
 	embedderModelsDir := getEmbedderModelsDir()
-	if _, err := os.Stat(embedderModelsDir); os.IsNotExist(err) {
-		t.Skipf("Embedder models directory not found: %s", embedderModelsDir)
-	}
 
 	logger := zaptest.NewLogger(t)
 
 	sm := hugot.NewSessionManager()
 	defer sm.Close()
 
-	registry, err := termite.NewLazyEmbedderRegistry(
-		termite.LazyEmbedderConfig{
+	registry, err := termite.NewEmbedderRegistry(
+		termite.EmbedderConfig{
 			ModelsDir:       embedderModelsDir,
 			KeepAlive:       5 * time.Minute,
 			MaxLoadedModels: 1,
@@ -232,14 +232,14 @@ func textToContentParts(text string) [][]ai.ContentPart {
 func BenchmarkMemoryPerShape(b *testing.B) {
 	embedderModelsDir := getEmbedderModelsDir()
 	if _, err := os.Stat(embedderModelsDir); os.IsNotExist(err) {
-		b.Skipf("Embedder models directory not found: %s", embedderModelsDir)
+		b.Skipf("Embedder models directory not found: %s (run a test first to download)", embedderModelsDir)
 	}
 
 	sm := hugot.NewSessionManager()
 	defer sm.Close()
 
-	registry, err := termite.NewLazyEmbedderRegistry(
-		termite.LazyEmbedderConfig{
+	registry, err := termite.NewEmbedderRegistry(
+		termite.EmbedderConfig{
 			ModelsDir:       embedderModelsDir,
 			KeepAlive:       5 * time.Minute,
 			MaxLoadedModels: 1,

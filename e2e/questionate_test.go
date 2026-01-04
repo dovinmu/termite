@@ -35,13 +35,17 @@ const (
 	questionatorModelName = "lmqg/flan-t5-small-squad-qg"
 )
 
-// TestQuestionateE2E tests the Questionator (Seq2Seq question generation) pipeline:
-// 1. Starts termite server with Questionator model
-// 2. Tests question generation from context
-func TestQuestionateE2E(t *testing.T) {
+// TestQuestionGenerateE2E tests the Questionator (Seq2Seq question generation) pipeline:
+// 1. Downloads Questionator model if not present (lazy download)
+// 2. Starts termite server with Questionator model
+// 3. Tests question generation from context
+func TestQuestionGenerateE2E(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping E2E test in short mode")
 	}
+
+	// Ensure questionator model is downloaded (lazy download)
+	ensureRegistryModel(t, questionatorModelName, ModelTypeRewriter)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
