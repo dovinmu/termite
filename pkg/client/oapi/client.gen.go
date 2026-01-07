@@ -501,10 +501,51 @@ type ImageURLContentPart struct {
 // ImageURLContentPartType defines model for ImageURLContentPart.Type.
 type ImageURLContentPartType string
 
+// ClassifyRequest defines model for ClassifyRequest.
+type ClassifyRequest struct {
+	// HypothesisTemplate Custom template for hypothesis generation.
+	// Default: "This text is about {}."
+	HypothesisTemplate string `json:"hypothesis_template,omitempty,omitzero"`
+
+	// Labels Candidate labels for classification
+	Labels []string `json:"labels"`
+
+	// Model Name of classifier model from models_dir/classifiers/
+	Model string `json:"model"`
+
+	// MultiLabel If true, scores are independent (sigmoid).
+	// If false, scores are normalized to sum to 1 (softmax).
+	MultiLabel bool `json:"multi_label,omitempty,omitzero"`
+
+	// Texts Texts to classify
+	Texts []string `json:"texts"`
+}
+
+// ClassifyResponse defines model for ClassifyResponse.
+type ClassifyResponse struct {
+	// Model Name of model used for classification
+	Model string `json:"model"`
+
+	// Results Array of classification results (one per input text)
+	Results [][]ClassifyResult `json:"results"`
+}
+
+// ClassifyResult defines model for ClassifyResult.
+type ClassifyResult struct {
+	// Label The classification label
+	Label string `json:"label"`
+
+	// Score Confidence score for this label (0.0 to 1.0)
+	Score float32 `json:"score"`
+}
+
 // ModelsResponse defines model for ModelsResponse.
 type ModelsResponse struct {
 	// Chunkers Available chunking models (always includes "fixed")
 	Chunkers []string `json:"chunkers"`
+
+	// Classifiers Available classifier models from models_dir/classifiers/
+	Classifiers []string `json:"classifiers,omitempty,omitzero"`
 
 	// Embedders Available embedding models from models_dir/embedders/
 	Embedders []string `json:"embedders"`
@@ -769,6 +810,9 @@ type GenerateEmbeddingsJSONRequestBody = EmbedRequest
 
 // GenerateContentJSONRequestBody defines body for GenerateContent for application/json ContentType.
 type GenerateContentJSONRequestBody = GenerateRequest
+
+// ClassifyTextJSONRequestBody defines body for ClassifyText for application/json ContentType.
+type ClassifyTextJSONRequestBody = ClassifyRequest
 
 // RecognizeEntitiesJSONRequestBody defines body for RecognizeEntities for application/json ContentType.
 type RecognizeEntitiesJSONRequestBody = RecognizeRequest
@@ -1131,6 +1175,11 @@ type ClientInterface interface {
 
 	ChunkText(ctx context.Context, body ChunkTextJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClassifyTextWithBody request with any body
+	ClassifyTextWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ClassifyText(ctx context.Context, body ClassifyTextJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GenerateEmbeddingsWithBody request with any body
 	GenerateEmbeddingsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1177,6 +1226,30 @@ func (c *Client) ChunkTextWithBody(ctx context.Context, contentType string, body
 
 func (c *Client) ChunkText(ctx context.Context, body ChunkTextJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewChunkTextRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ClassifyTextWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClassifyTextRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ClassifyText(ctx context.Context, body ClassifyTextJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClassifyTextRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1352,6 +1425,46 @@ func NewChunkTextRequestWithBody(server string, contentType string, body io.Read
 	}
 
 	operationPath := fmt.Sprintf("/chunk")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClassifyTextRequest calls the generic ClassifyText builder with application/json body
+func NewClassifyTextRequest(server string, body ClassifyTextJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClassifyTextRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewClassifyTextRequestWithBody generates requests for ClassifyText with any type of body
+func NewClassifyTextRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/classify")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1673,6 +1786,11 @@ type ClientWithResponsesInterface interface {
 
 	ChunkTextWithResponse(ctx context.Context, body ChunkTextJSONRequestBody, reqEditors ...RequestEditorFn) (*ChunkTextResponse, error)
 
+	// ClassifyTextWithBodyWithResponse request with any body
+	ClassifyTextWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClassifyTextResponse, error)
+
+	ClassifyTextWithResponse(ctx context.Context, body ClassifyTextJSONRequestBody, reqEditors ...RequestEditorFn) (*ClassifyTextResponse, error)
+
 	// GenerateEmbeddingsWithBodyWithResponse request with any body
 	GenerateEmbeddingsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*GenerateEmbeddingsResponse, error)
 
@@ -1723,6 +1841,32 @@ func (r ChunkTextResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r ChunkTextResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ClassifyTextResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ClassifyResponse
+	JSON400      *Error
+	JSON404      *Error
+	JSON500      *Error
+	JSON503      *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ClassifyTextResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClassifyTextResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -1922,6 +2066,23 @@ func (c *ClientWithResponses) ChunkTextWithResponse(ctx context.Context, body Ch
 	return ParseChunkTextResponse(rsp)
 }
 
+// ClassifyTextWithBodyWithResponse request with arbitrary body returning *ClassifyTextResponse
+func (c *ClientWithResponses) ClassifyTextWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClassifyTextResponse, error) {
+	rsp, err := c.ClassifyTextWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClassifyTextResponse(rsp)
+}
+
+func (c *ClientWithResponses) ClassifyTextWithResponse(ctx context.Context, body ClassifyTextJSONRequestBody, reqEditors ...RequestEditorFn) (*ClassifyTextResponse, error) {
+	rsp, err := c.ClassifyText(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClassifyTextResponse(rsp)
+}
+
 // GenerateEmbeddingsWithBodyWithResponse request with arbitrary body returning *GenerateEmbeddingsResponse
 func (c *ClientWithResponses) GenerateEmbeddingsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*GenerateEmbeddingsResponse, error) {
 	rsp, err := c.GenerateEmbeddingsWithBody(ctx, contentType, body, reqEditors...)
@@ -2059,6 +2220,60 @@ func ParseChunkTextResponse(rsp *http.Response) (*ChunkTextResponse, error) {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClassifyTextResponse parses an HTTP response from a ClassifyTextWithResponse call
+func ParseClassifyTextResponse(rsp *http.Response) (*ClassifyTextResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClassifyTextResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ClassifyResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 

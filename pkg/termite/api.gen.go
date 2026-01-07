@@ -501,10 +501,51 @@ type ImageURLContentPart struct {
 // ImageURLContentPartType defines model for ImageURLContentPart.Type.
 type ImageURLContentPartType string
 
+// ClassifyRequest defines model for ClassifyRequest.
+type ClassifyRequest struct {
+	// HypothesisTemplate Custom template for hypothesis generation.
+	// Default: "This text is about {}."
+	HypothesisTemplate string `json:"hypothesis_template,omitempty,omitzero"`
+
+	// Labels Candidate labels for classification
+	Labels []string `json:"labels"`
+
+	// Model Name of classifier model from models_dir/classifiers/
+	Model string `json:"model"`
+
+	// MultiLabel If true, scores are independent (sigmoid).
+	// If false, scores are normalized to sum to 1 (softmax).
+	MultiLabel bool `json:"multi_label,omitempty,omitzero"`
+
+	// Texts Texts to classify
+	Texts []string `json:"texts"`
+}
+
+// ClassifyResponse defines model for ClassifyResponse.
+type ClassifyResponse struct {
+	// Model Name of model used for classification
+	Model string `json:"model"`
+
+	// Results Array of classification results (one per input text)
+	Results [][]ClassifyResult `json:"results"`
+}
+
+// ClassifyResult defines model for ClassifyResult.
+type ClassifyResult struct {
+	// Label The classification label
+	Label string `json:"label"`
+
+	// Score Confidence score for this label (0.0 to 1.0)
+	Score float32 `json:"score"`
+}
+
 // ModelsResponse defines model for ModelsResponse.
 type ModelsResponse struct {
 	// Chunkers Available chunking models (always includes "fixed")
 	Chunkers []string `json:"chunkers"`
+
+	// Classifiers Available classifier models from models_dir/classifiers/
+	Classifiers []string `json:"classifiers,omitempty,omitzero"`
 
 	// Embedders Available embedding models from models_dir/embedders/
 	Embedders []string `json:"embedders"`
@@ -1058,6 +1099,9 @@ type ServerInterface interface {
 	// Chunk text into smaller segments
 	// (POST /chunk)
 	ChunkText(w http.ResponseWriter, r *http.Request)
+	// Classify text using zero-shot classification
+	// (POST /classify)
+	ClassifyText(w http.ResponseWriter, r *http.Request)
 	// Generate embeddings
 	// (POST /embed)
 	GenerateEmbeddings(w http.ResponseWriter, r *http.Request)
@@ -1095,6 +1139,20 @@ func (siw *ServerInterfaceWrapper) ChunkText(w http.ResponseWriter, r *http.Requ
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ChunkText(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClassifyText operation middleware
+func (siw *ServerInterfaceWrapper) ClassifyText(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClassifyText(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1323,6 +1381,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc("POST "+options.BaseURL+"/chunk", wrapper.ChunkText)
+	m.HandleFunc("POST "+options.BaseURL+"/classify", wrapper.ClassifyText)
 	m.HandleFunc("POST "+options.BaseURL+"/embed", wrapper.GenerateEmbeddings)
 	m.HandleFunc("POST "+options.BaseURL+"/generate", wrapper.GenerateContent)
 	m.HandleFunc("GET "+options.BaseURL+"/models", wrapper.ListModels)
