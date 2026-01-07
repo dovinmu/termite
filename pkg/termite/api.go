@@ -34,7 +34,7 @@ import (
 	"github.com/antflydb/antfly-go/libaf/scraping"
 	"github.com/antflydb/termite/pkg/termite/lib/generation"
 	"github.com/antflydb/termite/pkg/termite/lib/ner"
-	"github.com/antflydb/termite/pkg/termite/lib/zsc"
+	"github.com/antflydb/termite/pkg/termite/lib/classification"
 	"github.com/bytedance/sonic/decoder"
 	"github.com/bytedance/sonic/encoder"
 	"go.uber.org/zap"
@@ -1416,16 +1416,16 @@ func (ln *TermiteNode) handleApiClassify(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Perform classification
-	var zscResults [][]zsc.Classification
+	var classifyResults [][]classification.Classification
 	var classifyErr error
 
 	// Use custom hypothesis template if provided, otherwise use default
 	if req.HypothesisTemplate != "" {
-		zscResults, classifyErr = classifier.ClassifyWithHypothesis(r.Context(), req.Texts, req.Labels, req.HypothesisTemplate)
+		classifyResults, classifyErr = classifier.ClassifyWithHypothesis(r.Context(), req.Texts, req.Labels, req.HypothesisTemplate)
 	} else if req.MultiLabel {
-		zscResults, classifyErr = classifier.MultiLabelClassify(r.Context(), req.Texts, req.Labels)
+		classifyResults, classifyErr = classifier.MultiLabelClassify(r.Context(), req.Texts, req.Labels)
 	} else {
-		zscResults, classifyErr = classifier.Classify(r.Context(), req.Texts, req.Labels)
+		classifyResults, classifyErr = classifier.Classify(r.Context(), req.Texts, req.Labels)
 	}
 
 	if classifyErr != nil {
@@ -1439,8 +1439,8 @@ func (ln *TermiteNode) handleApiClassify(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Convert to API response format
-	results := make([][]ClassifyResult, len(zscResults))
-	for i, textResults := range zscResults {
+	results := make([][]ClassifyResult, len(classifyResults))
+	for i, textResults := range classifyResults {
 		results[i] = make([]ClassifyResult, len(textResults))
 		for j, c := range textResults {
 			results[i][j] = ClassifyResult{

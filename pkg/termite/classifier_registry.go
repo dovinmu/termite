@@ -22,9 +22,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/antflydb/termite/pkg/termite/lib/classification"
 	"github.com/antflydb/termite/pkg/termite/lib/hugot"
 	"github.com/antflydb/termite/pkg/termite/lib/modelregistry"
-	"github.com/antflydb/termite/pkg/termite/lib/zsc"
 	"github.com/jellydator/ttlcache/v3"
 	"go.uber.org/zap"
 )
@@ -39,8 +39,8 @@ type ClassifierModelInfo struct {
 
 // loadedClassifier wraps a loaded classifier
 type loadedClassifier struct {
-	classifier zsc.Classifier
-	config     zsc.Config
+	classifier classification.Classifier
+	config     classification.Config
 }
 
 // ClassifierRegistry manages zero-shot classification models with lazy loading and TTL-based unloading
@@ -183,7 +183,7 @@ func (r *ClassifierRegistry) discoverModels() error {
 		registryFullName := dm.FullName()
 
 		// Check if this is a valid classifier model (has zsc_config.json or is NLI model)
-		if !zsc.IsZSCModel(modelPath) {
+		if !classification.IsClassifierModel(modelPath) {
 			r.logger.Debug("Skipping non-classifier model",
 				zap.String("dir", registryFullName))
 			continue
@@ -235,7 +235,7 @@ func (r *ClassifierRegistry) discoverModels() error {
 }
 
 // Get returns a classifier model by name, loading it if necessary
-func (r *ClassifierRegistry) Get(modelName string) (zsc.Classifier, error) {
+func (r *ClassifierRegistry) Get(modelName string) (classification.Classifier, error) {
 	loaded, err := r.getLoaded(modelName)
 	if err != nil {
 		return nil, err
@@ -270,7 +270,7 @@ func (r *ClassifierRegistry) loadModel(info *ClassifierModelInfo) (*loadedClassi
 		zap.String("model", info.Name),
 		zap.String("path", info.Path))
 
-	model, backendUsed, err := zsc.NewPooledHugotZSCWithSessionManager(
+	model, backendUsed, err := classification.NewPooledHugotClassifierWithSessionManager(
 		info.Path, info.PoolSize, r.sessionManager, nil, r.logger.Named(info.Name))
 	if err != nil {
 		return nil, fmt.Errorf("loading classifier model %s: %w", info.Name, err)

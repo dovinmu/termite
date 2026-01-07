@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package zsc provides Zero-Shot Classification functionality using NLI models.
-// Zero-shot classification allows classifying text into arbitrary categories
-// without requiring training data for those specific categories.
-package zsc
+// Package classification provides text classification functionality using NLI models.
+// Supports zero-shot classification, allowing text to be classified into arbitrary
+// categories without requiring training data for those specific categories.
+package classification
 
 import (
 	"context"

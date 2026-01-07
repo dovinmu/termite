@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package zsc
+package classification
 
 import (
 	"context"
@@ -32,12 +32,12 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// Ensure HugotZSC implements Classifier
-var _ Classifier = (*HugotZSC)(nil)
+// Ensure HugotClassifier implements Classifier
+var _ Classifier = (*HugotClassifier)(nil)
 
-// HugotZSC implements zero-shot classification using the Hugot ONNX runtime.
+// HugotClassifier implements zero-shot classification using the Hugot ONNX runtime.
 // It uses NLI-based models like mDeBERTa for zero-shot text classification.
-type HugotZSC struct {
+type HugotClassifier struct {
 	session       *khugot.Session
 	pipeline      *pipelines.ZeroShotClassificationPipeline
 	logger        *zap.Logger
@@ -45,8 +45,8 @@ type HugotZSC struct {
 	config        Config
 }
 
-// PooledHugotZSC manages multiple zero-shot classification pipelines for concurrent requests.
-type PooledHugotZSC struct {
+// PooledHugotClassifier manages multiple zero-shot classification pipelines for concurrent requests.
+type PooledHugotClassifier struct {
 	session       *khugot.Session
 	pipelines     []*pipelines.ZeroShotClassificationPipeline
 	sem           *semaphore.Weighted
@@ -57,13 +57,13 @@ type PooledHugotZSC struct {
 	config        Config
 }
 
-// NewHugotZSC creates a new zero-shot classifier using the Hugot ONNX runtime.
-func NewHugotZSC(modelPath string, logger *zap.Logger) (*HugotZSC, error) {
-	return NewHugotZSCWithSession(modelPath, nil, logger)
+// NewHugotClassifier creates a new zero-shot classifier using the Hugot ONNX runtime.
+func NewHugotClassifier(modelPath string, logger *zap.Logger) (*HugotClassifier, error) {
+	return NewHugotClassifierWithSession(modelPath, nil, logger)
 }
 
-// NewHugotZSCWithSession creates a new zero-shot classifier with an optional shared session.
-func NewHugotZSCWithSession(modelPath string, sharedSession *khugot.Session, logger *zap.Logger) (*HugotZSC, error) {
+// NewHugotClassifierWithSession creates a new zero-shot classifier with an optional shared session.
+func NewHugotClassifierWithSession(modelPath string, sharedSession *khugot.Session, logger *zap.Logger) (*HugotClassifier, error) {
 	if modelPath == "" {
 		return nil, errors.New("model path is required")
 	}
@@ -135,7 +135,7 @@ func NewHugotZSCWithSession(modelPath string, sharedSession *khugot.Session, log
 		zap.String("hypothesis_template", config.HypothesisTemplate),
 		zap.Bool("multi_label", config.MultiLabel))
 
-	return &HugotZSC{
+	return &HugotClassifier{
 		session:       session,
 		pipeline:      pipeline,
 		logger:        logger,
@@ -144,8 +144,8 @@ func NewHugotZSCWithSession(modelPath string, sharedSession *khugot.Session, log
 	}, nil
 }
 
-// NewHugotZSCWithSessionManager creates a new zero-shot classifier using a SessionManager.
-func NewHugotZSCWithSessionManager(modelPath string, sessionManager *hugot.SessionManager, modelBackends []string, logger *zap.Logger) (*HugotZSC, hugot.BackendType, error) {
+// NewHugotClassifierWithSessionManager creates a new zero-shot classifier using a SessionManager.
+func NewHugotClassifierWithSessionManager(modelPath string, sessionManager *hugot.SessionManager, modelBackends []string, logger *zap.Logger) (*HugotClassifier, hugot.BackendType, error) {
 	if modelPath == "" {
 		return nil, "", errors.New("model path is required")
 	}
@@ -155,7 +155,7 @@ func NewHugotZSCWithSessionManager(modelPath string, sessionManager *hugot.Sessi
 	}
 
 	if sessionManager == nil {
-		model, err := NewHugotZSCWithSession(modelPath, nil, logger)
+		model, err := NewHugotClassifierWithSession(modelPath, nil, logger)
 		if err != nil {
 			return nil, "", err
 		}
@@ -212,7 +212,7 @@ func NewHugotZSCWithSessionManager(modelPath string, sessionManager *hugot.Sessi
 	logger.Info("Zero-Shot Classifier initialization complete",
 		zap.String("backend", string(backendUsed)))
 
-	return &HugotZSC{
+	return &HugotClassifier{
 		session:       session,
 		pipeline:      pipeline,
 		logger:        logger,
@@ -222,12 +222,12 @@ func NewHugotZSCWithSessionManager(modelPath string, sessionManager *hugot.Sessi
 }
 
 // Classify classifies texts using the specified candidate labels.
-func (c *HugotZSC) Classify(ctx context.Context, texts []string, labels []string) ([][]Classification, error) {
+func (c *HugotClassifier) Classify(ctx context.Context, texts []string, labels []string) ([][]Classification, error) {
 	return c.ClassifyWithHypothesis(ctx, texts, labels, c.config.HypothesisTemplate)
 }
 
 // ClassifyWithHypothesis classifies texts using a custom hypothesis template.
-func (c *HugotZSC) ClassifyWithHypothesis(ctx context.Context, texts []string, labels []string, hypothesisTemplate string) ([][]Classification, error) {
+func (c *HugotClassifier) ClassifyWithHypothesis(ctx context.Context, texts []string, labels []string, hypothesisTemplate string) ([][]Classification, error) {
 	if len(texts) == 0 {
 		return [][]Classification{}, nil
 	}
@@ -272,7 +272,7 @@ func (c *HugotZSC) ClassifyWithHypothesis(ctx context.Context, texts []string, l
 }
 
 // MultiLabelClassify classifies texts allowing multiple labels per text.
-func (c *HugotZSC) MultiLabelClassify(ctx context.Context, texts []string, labels []string) ([][]Classification, error) {
+func (c *HugotClassifier) MultiLabelClassify(ctx context.Context, texts []string, labels []string) ([][]Classification, error) {
 	if len(texts) == 0 {
 		return [][]Classification{}, nil
 	}
@@ -324,7 +324,7 @@ func (c *HugotZSC) MultiLabelClassify(ctx context.Context, texts []string, label
 }
 
 // Close releases resources.
-func (c *HugotZSC) Close() error {
+func (c *HugotClassifier) Close() error {
 	if c.session != nil && !c.sessionShared {
 		c.logger.Info("Destroying Hugot session (owned by this ZSC model)")
 		c.session.Destroy()
@@ -333,7 +333,7 @@ func (c *HugotZSC) Close() error {
 }
 
 // Config returns the classifier configuration.
-func (c *HugotZSC) Config() Config {
+func (c *HugotClassifier) Config() Config {
 	return c.config
 }
 
@@ -362,23 +362,23 @@ func convertZSCOutput(output *pipelines.ZeroShotOutput) [][]Classification {
 // Pooled Implementation for Concurrent Access
 // =============================================================================
 
-// NewPooledHugotZSC creates a pooled zero-shot classifier for concurrent requests.
-func NewPooledHugotZSC(modelPath string, poolSize int, logger *zap.Logger) (*PooledHugotZSC, error) {
-	return NewPooledHugotZSCWithSession(modelPath, poolSize, nil, logger)
+// NewPooledHugotClassifier creates a pooled zero-shot classifier for concurrent requests.
+func NewPooledHugotClassifier(modelPath string, poolSize int, logger *zap.Logger) (*PooledHugotClassifier, error) {
+	return NewPooledHugotClassifierWithSession(modelPath, poolSize, nil, logger)
 }
 
-// NewPooledHugotZSCWithSession creates a pooled zero-shot classifier with an optional shared session.
-func NewPooledHugotZSCWithSession(modelPath string, poolSize int, sharedSession *khugot.Session, logger *zap.Logger) (*PooledHugotZSC, error) {
-	classifier, _, err := newPooledHugotZSCInternal(modelPath, poolSize, sharedSession, nil, nil, logger)
+// NewPooledHugotClassifierWithSession creates a pooled zero-shot classifier with an optional shared session.
+func NewPooledHugotClassifierWithSession(modelPath string, poolSize int, sharedSession *khugot.Session, logger *zap.Logger) (*PooledHugotClassifier, error) {
+	classifier, _, err := newPooledHugotClassifierInternal(modelPath, poolSize, sharedSession, nil, nil, logger)
 	return classifier, err
 }
 
-// NewPooledHugotZSCWithSessionManager creates a pooled zero-shot classifier using a SessionManager.
-func NewPooledHugotZSCWithSessionManager(modelPath string, poolSize int, sessionManager *hugot.SessionManager, modelBackends []string, logger *zap.Logger) (*PooledHugotZSC, hugot.BackendType, error) {
-	return newPooledHugotZSCInternal(modelPath, poolSize, nil, sessionManager, modelBackends, logger)
+// NewPooledHugotClassifierWithSessionManager creates a pooled zero-shot classifier using a SessionManager.
+func NewPooledHugotClassifierWithSessionManager(modelPath string, poolSize int, sessionManager *hugot.SessionManager, modelBackends []string, logger *zap.Logger) (*PooledHugotClassifier, hugot.BackendType, error) {
+	return newPooledHugotClassifierInternal(modelPath, poolSize, nil, sessionManager, modelBackends, logger)
 }
 
-func newPooledHugotZSCInternal(modelPath string, poolSize int, sharedSession *khugot.Session, sessionManager *hugot.SessionManager, modelBackends []string, logger *zap.Logger) (*PooledHugotZSC, hugot.BackendType, error) {
+func newPooledHugotClassifierInternal(modelPath string, poolSize int, sharedSession *khugot.Session, sessionManager *hugot.SessionManager, modelBackends []string, logger *zap.Logger) (*PooledHugotClassifier, hugot.BackendType, error) {
 	if modelPath == "" {
 		return nil, hugot.BackendGo, errors.New("model path is required")
 	}
@@ -473,7 +473,7 @@ func newPooledHugotZSCInternal(modelPath string, poolSize int, sharedSession *kh
 
 	logger.Info("Successfully created pooled ZSC pipelines", zap.Int("count", poolSize))
 
-	return &PooledHugotZSC{
+	return &PooledHugotClassifier{
 		session:       session,
 		pipelines:     pipelinesList,
 		sem:           semaphore.NewWeighted(int64(poolSize)),
@@ -485,12 +485,12 @@ func newPooledHugotZSCInternal(modelPath string, poolSize int, sharedSession *kh
 }
 
 // Classify classifies texts using the specified candidate labels.
-func (p *PooledHugotZSC) Classify(ctx context.Context, texts []string, labels []string) ([][]Classification, error) {
+func (p *PooledHugotClassifier) Classify(ctx context.Context, texts []string, labels []string) ([][]Classification, error) {
 	return p.ClassifyWithHypothesis(ctx, texts, labels, p.config.HypothesisTemplate)
 }
 
 // ClassifyWithHypothesis classifies texts using a custom hypothesis template.
-func (p *PooledHugotZSC) ClassifyWithHypothesis(ctx context.Context, texts []string, labels []string, hypothesisTemplate string) ([][]Classification, error) {
+func (p *PooledHugotClassifier) ClassifyWithHypothesis(ctx context.Context, texts []string, labels []string, hypothesisTemplate string) ([][]Classification, error) {
 	if len(texts) == 0 {
 		return [][]Classification{}, nil
 	}
@@ -537,7 +537,7 @@ func (p *PooledHugotZSC) ClassifyWithHypothesis(ctx context.Context, texts []str
 }
 
 // MultiLabelClassify classifies texts allowing multiple labels per text.
-func (p *PooledHugotZSC) MultiLabelClassify(ctx context.Context, texts []string, labels []string) ([][]Classification, error) {
+func (p *PooledHugotClassifier) MultiLabelClassify(ctx context.Context, texts []string, labels []string) ([][]Classification, error) {
 	if len(texts) == 0 {
 		return [][]Classification{}, nil
 	}
@@ -591,7 +591,7 @@ func (p *PooledHugotZSC) MultiLabelClassify(ctx context.Context, texts []string,
 }
 
 // Close releases resources.
-func (p *PooledHugotZSC) Close() error {
+func (p *PooledHugotClassifier) Close() error {
 	if p.session != nil && !p.sessionShared {
 		p.logger.Info("Destroying Hugot session (owned by this pooled ZSC)")
 		return p.session.Destroy()
@@ -600,7 +600,7 @@ func (p *PooledHugotZSC) Close() error {
 }
 
 // Config returns the classifier configuration.
-func (p *PooledHugotZSC) Config() Config {
+func (p *PooledHugotClassifier) Config() Config {
 	return p.config
 }
 
@@ -608,8 +608,8 @@ func (p *PooledHugotZSC) Config() Config {
 // Model Detection
 // =============================================================================
 
-// IsZSCModel checks if the model path contains a zero-shot classification model.
-func IsZSCModel(modelPath string) bool {
+// IsClassifierModel checks if the model path contains a zero-shot classification model.
+func IsClassifierModel(modelPath string) bool {
 	// Check for zsc_config.json
 	configPath := filepath.Join(modelPath, "zsc_config.json")
 	if _, err := os.Stat(configPath); err == nil {
