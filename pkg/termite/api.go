@@ -1458,8 +1458,8 @@ func (ln *TermiteNode) handleApiClassify(w http.ResponseWriter, r *http.Request)
 
 	// Send response
 	resp := ClassifyResponse{
-		Model:   req.Model,
-		Results: results,
+		Model:           req.Model,
+		Classifications: results,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
