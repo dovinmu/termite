@@ -67,12 +67,6 @@ func normalizeL2(vec []float32) []float32 {
 // See batch_test.go for validation of this limitation.
 const DefaultEmbeddingBatchSize = 1
 
-// embedderInstanceCounter provides unique instance IDs for pooled embedders.
-// This ensures pipeline names are unique even after TTL expiration and reload,
-// preventing "pipeline has already been initialised" errors when the hugot
-// session still holds references to old pipelines that weren't properly destroyed.
-var embedderInstanceCounter atomic.Uint64
-
 // PooledHugotEmbedder manages multiple ONNX pipelines for concurrent embedding generation.
 // Each request acquires a pipeline slot via semaphore, enabling true parallelism.
 type PooledHugotEmbedder struct {
@@ -85,7 +79,6 @@ type PooledHugotEmbedder struct {
 	poolSize      int
 	caps          embeddings.EmbedderCapabilities
 	batchSize     int
-	instanceID    uint64 // Unique instance ID for pipeline naming
 }
 
 // NewPooledHugotEmbedder creates a new pooled embedder using the Hugot ONNX runtime.
@@ -144,13 +137,10 @@ func NewPooledHugotEmbedderWithSession(modelPath string, onnxFilename string, po
 		logger.Info("Created new Hugot session", zap.String("backend", hugot.BackendName()))
 	}
 
-	// Generate unique instance ID to prevent pipeline name collisions after TTL reload
-	instanceID := embedderInstanceCounter.Add(1)
-
-	// Create N pipelines with unique names (including instance ID)
+	// Create N pipelines with unique names
 	pipelinesList := make([]*pipelines.FeatureExtractionPipeline, poolSize)
 	for i := 0; i < poolSize; i++ {
-		pipelineName := fmt.Sprintf("%s:%s:%d:%d", modelPath, onnxFilename, instanceID, i)
+		pipelineName := fmt.Sprintf("%s:%s:%d", modelPath, onnxFilename, i)
 		pipelineConfig := khugot.FeatureExtractionConfig{
 			ModelPath:    modelPath,
 			Name:         pipelineName,
@@ -175,7 +165,7 @@ func NewPooledHugotEmbedderWithSession(modelPath string, onnxFilename string, po
 		logger.Debug("Created pipeline", zap.Int("index", i), zap.String("name", pipelineName))
 	}
 
-	logger.Info("Successfully created pooled feature extraction pipelines", zap.Int("count", poolSize), zap.Uint64("instanceID", instanceID))
+	logger.Info("Successfully created pooled feature extraction pipelines", zap.Int("count", poolSize))
 
 	return &PooledHugotEmbedder{
 		session:       session,
@@ -186,7 +176,6 @@ func NewPooledHugotEmbedderWithSession(modelPath string, onnxFilename string, po
 		poolSize:      poolSize,
 		caps:          embeddings.TextOnlyCapabilities(),
 		batchSize:     DefaultEmbeddingBatchSize,
-		instanceID:    instanceID,
 	}, nil
 }
 
@@ -252,20 +241,16 @@ func NewPooledHugotEmbedderWithSessionManager(
 		backendUsed = hugot.GetDefaultBackend().Type()
 	}
 
-	// Generate unique instance ID to prevent pipeline name collisions after TTL reload
-	instanceID := embedderInstanceCounter.Add(1)
-
 	logger.Info("Initializing pooled Hugot embedder",
 		zap.String("modelPath", modelPath),
 		zap.String("onnxFilename", onnxFilename),
 		zap.Int("poolSize", poolSize),
-		zap.String("backend", string(backendUsed)),
-		zap.Uint64("instanceID", instanceID))
+		zap.String("backend", string(backendUsed)))
 
-	// Create N pipelines with unique names (including instance ID)
+	// Create N pipelines with unique names
 	pipelinesList := make([]*pipelines.FeatureExtractionPipeline, poolSize)
 	for i := 0; i < poolSize; i++ {
-		pipelineName := fmt.Sprintf("%s:%s:%d:%d", modelPath, onnxFilename, instanceID, i)
+		pipelineName := fmt.Sprintf("%s:%s:%d", modelPath, onnxFilename, i)
 		pipelineConfig := khugot.FeatureExtractionConfig{
 			ModelPath:    modelPath,
 			Name:         pipelineName,
@@ -283,9 +268,10 @@ func NewPooledHugotEmbedderWithSessionManager(
 			return nil, "", fmt.Errorf("creating feature extraction pipeline %d: %w", i, err)
 		}
 		pipelinesList[i] = pipeline
+
 	}
 
-	logger.Info("Successfully created pooled feature extraction pipelines", zap.Int("count", poolSize), zap.Uint64("instanceID", instanceID))
+	logger.Info("Successfully created pooled feature extraction pipelines", zap.Int("count", poolSize))
 
 	return &PooledHugotEmbedder{
 		session:       session,
@@ -296,7 +282,6 @@ func NewPooledHugotEmbedderWithSessionManager(
 		poolSize:      poolSize,
 		caps:          embeddings.TextOnlyCapabilities(),
 		batchSize:     DefaultEmbeddingBatchSize,
-		instanceID:    instanceID,
 	}, backendUsed, nil
 }
 
@@ -388,23 +373,25 @@ func (p *PooledHugotEmbedder) Embed(ctx context.Context, contents [][]ai.Content
 }
 
 // Close releases resources.
-// Pipeline names include unique instance IDs, so name collisions are avoided
-// even when pipelines can't be explicitly destroyed from the session.
-// Only destroys the session if it was created by this embedder (not shared).
+// Properly closes each pipeline to remove it from the session, then destroys
+// the session if it was created by this embedder (not shared).
 func (p *PooledHugotEmbedder) Close() error {
-	// Clear pipeline references (they'll be garbage collected)
-	// Note: FeatureExtractionPipeline doesn't have a Destroy method,
-	// but we use unique instance IDs in pipeline names to avoid collisions.
+	// Close each pipeline to remove it from the session
+	for _, pipeline := range p.pipelines {
+		if pipeline != nil {
+			name := pipeline.PipelineName
+			if err := khugot.ClosePipeline[*pipelines.FeatureExtractionPipeline](p.session, name); err != nil {
+				p.logger.Warn("Failed to close pipeline", zap.String("name", name), zap.Error(err))
+			}
+		}
+	}
 	p.pipelines = nil
 
 	if p.session != nil && !p.sessionShared {
-		p.logger.Info("Destroying Hugot session (owned by this pooled embedder)",
-			zap.Uint64("instanceID", p.instanceID))
+		p.logger.Info("Destroying Hugot session (owned by this pooled embedder)")
 		return p.session.Destroy()
 	} else if p.sessionShared {
-		p.logger.Debug("Skipping session destruction (shared session)",
-			zap.Uint64("instanceID", p.instanceID))
+		p.logger.Debug("Skipping session destruction (shared session)")
 	}
-
 	return nil
 }
