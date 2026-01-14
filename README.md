@@ -128,48 +128,48 @@ Models auto-discovered from `chunker_models_dir`, `embedder_models_dir`, `rerank
 
 #### Embedders
 
-| Model | Size | Variants | Description |
-|-------|------|----------|-------------|
-| `bge-small-en-v1.5` | 128MB | f16, i8 | Compact English sentence embeddings. Great balance of speed and quality. |
-| `all-MiniLM-L6-v2` | 87MB | f32, f16, i8 | Extremely fast sentence embeddings. Optimized for high-throughput. ONNX only. |
-| `all-mpnet-base-v2` | 418MB | f32, f16, i8 | High-quality sentence embeddings. Best accuracy among sentence-transformers. ONNX only. |
-| `clip-vit-base-patch32` | 584MB | f16, i8 | Multimodal text+image embeddings. Enables cross-modal search. ONNX only. |
+| Model | Size | Variants |
+|-------|------|----------|
+| `bge-small-en-v1.5` | 128MB | f16, i8 |
+| `all-MiniLM-L6-v2` | 87MB | f32, f16, i8 |
+| `all-mpnet-base-v2` | 418MB | f32, f16, i8 |
+| `clip-vit-base-patch32` | 584MB | f16, i8 |
 
 #### Rerankers
 
-| Model | Size | Variants | Description |
-|-------|------|----------|-------------|
-| `mxbai-rerank-base-v1` | 713MB | f16, i8 | State-of-the-art document reranking. Significantly improves search relevance. |
+| Model | Size | Variants |
+|-------|------|----------|
+| `mxbai-rerank-base-v1` | 713MB | f16, i8 |
 
 #### Chunkers
 
-| Model | Size | Variants | Description |
-|-------|------|----------|-------------|
-| `chonky-mmbert-small-multilingual-1` | 570MB | f16, i8 | Neural semantic chunking with multilingual support. |
+| Model | Size | Variants |
+|-------|------|----------|
+| `chonky-mmbert-small-multilingual-1` | 570MB | f16, i8 |
 
 #### Recognizers (NER)
 
-| Model | Size | Variants | Capabilities | Description |
-|-------|------|----------|--------------|-------------|
-| `bert-base-NER` | 413MB | f32, f16, i8 | labels | Standard BERT NER (Person, Org, Location, Misc). ONNX only. |
-| `bert-large-NER` | 1.3GB | f32, f16, i8 | labels | Larger BERT NER for higher accuracy. ONNX only. |
-| `gliner_small-v2.1` | 199MB | f32, f16, i8 | labels, zeroshot | Zero-shot NER for any custom entity types. ONNX only. |
-| `gliner-multitask-large-v0.5` | 1.3GB | f32, f16, i8 | labels, zeroshot, relations, answers | Multitask: NER + relations + QA. ONNX only. |
-| `rebel-large` | 3.0GB | - | relations | Relation extraction for knowledge graph construction. |
+| Model | Size | Variants | Capabilities |
+|-------|------|----------|--------------|
+| `bert-base-NER` | 413MB | f32, f16, i8 | labels |
+| `bert-large-NER` | 1.3GB | f32, f16, i8 | labels |
+| `gliner_small-v2.1` | 199MB | f32, f16, i8 | labels, zeroshot |
+| `gliner-multitask-large-v0.5` | 1.3GB | f32, f16, i8 | labels, zeroshot, relations, answers |
+| `rebel-large` | 3.0GB | - | relations |
 
 #### Rewriters
 
-| Model | Size | Variants | Description |
-|-------|------|----------|-------------|
-| `flan-t5-small-squad-qg` | 569MB | - | Question generation from text passages. |
-| `pegasus_paraphrase` | 4.5GB | - | Paraphrasing for data augmentation and style transfer. |
+| Model | Size | Variants |
+|-------|------|----------|
+| `flan-t5-small-squad-qg` | 569MB | - |
+| `pegasus_paraphrase` | 4.5GB | - |
 
 #### Generators
 
-| Model | Size | Variants | Description |
-|-------|------|----------|-------------|
-| `functiongemma-270m-it` | 1.1GB | - | Compact model for function calling and tool use. |
-| `gemma-3-1b-it` | 3.7GB | - | Instruction-tuned Gemma for complex tasks. |
+| Model | Size | Variants |
+|-------|------|----------|
+| `functiongemma-270m-it` | 1.1GB | - |
+| `gemma-3-1b-it` | 3.7GB | - |
 
 ### Model Variants
 
