@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,6 +38,24 @@ import (
 	"github.com/antflydb/termite/pkg/termite/lib/ocr"
 	"github.com/antflydb/termite/pkg/termite/lib/reading"
 )
+
+// containsKeyPhrases checks if the OCR output contains expected key phrases.
+// Returns the percentage of phrases found and the list of missing phrases.
+func containsKeyPhrases(ocrOutput string, expectedPhrases []string) (float64, []string) {
+	ocrLower := strings.ToLower(ocrOutput)
+	var missing []string
+	found := 0
+
+	for _, phrase := range expectedPhrases {
+		if strings.Contains(ocrLower, strings.ToLower(phrase)) {
+			found++
+		} else {
+			missing = append(missing, phrase)
+		}
+	}
+
+	return float64(found) / float64(len(expectedPhrases)) * 100, missing
+}
 
 // Model repositories
 const (
@@ -251,7 +270,7 @@ func TestTrOCRWithPDFPage(t *testing.T) {
 		t.Skip("Skipping PDF OCR test in short mode")
 	}
 
-	pageImagePath := filepath.Join("testdata", "court-page-19.png")
+	pageImagePath := filepath.Join("testdata", "sample-page-1.png")
 	if _, err := os.Stat(pageImagePath); os.IsNotExist(err) {
 		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
@@ -370,7 +389,7 @@ func TestDonutWithPDFPage(t *testing.T) {
 		t.Skip("Skipping PDF Donut test in short mode")
 	}
 
-	pageImagePath := filepath.Join("testdata", "court-page-20.png")
+	pageImagePath := filepath.Join("testdata", "sample-page-1.png")
 	if _, err := os.Stat(pageImagePath); os.IsNotExist(err) {
 		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
@@ -413,7 +432,7 @@ func TestDocVQAWithPDFPage(t *testing.T) {
 		t.Skip("Skipping PDF DocVQA test in short mode")
 	}
 
-	pageImagePath := filepath.Join("testdata", "court-page-1.png")
+	pageImagePath := filepath.Join("testdata", "sample-page-1.png")
 	if _, err := os.Stat(pageImagePath); os.IsNotExist(err) {
 		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
@@ -461,13 +480,14 @@ func TestDocVQAWithPDFPage(t *testing.T) {
 // Florence-2 Tests
 // =============================================================================
 
-// TestFlorence2WithPDFPage tests Florence-2 for OCR on documents
+// TestFlorence2WithPDFPage tests Florence-2 for OCR on documents and validates
+// the output against expected text extracted from the PDF.
 func TestFlorence2WithPDFPage(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping PDF Florence-2 test in short mode")
 	}
 
-	pageImagePath := filepath.Join("testdata", "court-page-1.png")
+	pageImagePath := filepath.Join("testdata", "sample-page-1.png")
 	if _, err := os.Stat(pageImagePath); os.IsNotExist(err) {
 		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
@@ -499,11 +519,33 @@ func TestFlorence2WithPDFPage(t *testing.T) {
 	ocrPrompt := ocr.FlorencePrompt(ocr.FlorenceOCR)
 	t.Logf("Running Florence-2 OCR with prompt: %q", ocrPrompt)
 
-	results, err := reader.Read(ctx, []image.Image{img}, ocrPrompt, 256)
+	results, err := reader.Read(ctx, []image.Image{img}, ocrPrompt, 512)
 	if err != nil {
 		t.Fatalf("OCR failed: %v", err)
 	}
-	t.Logf("OCR output: %q", results[0].Text)
+	ocrOutput := results[0].Text
+	t.Logf("OCR output: %q", ocrOutput)
+
+	// Validate OCR output against expected key phrases from the sample PDF
+	// These are distinctive phrases that should appear in the OCR output
+	expectedPhrases := []string{
+		"heading",
+		"content",
+		"table",
+		"very long",
+		"page width",
+		"text box",
+	}
+
+	matchPercent, missing := containsKeyPhrases(ocrOutput, expectedPhrases)
+	t.Logf("OCR accuracy: %.1f%% of key phrases found", matchPercent)
+	if len(missing) > 0 {
+		t.Logf("Missing phrases: %v", missing)
+	}
+
+	// Require at least 50% of key phrases to be found
+	assert.GreaterOrEqual(t, matchPercent, 50.0,
+		"OCR should find at least 50%% of expected key phrases, got %.1f%%", matchPercent)
 
 	// Test caption
 	captionPrompt := ocr.FlorencePrompt(ocr.FlorenceDetailedCaption)
