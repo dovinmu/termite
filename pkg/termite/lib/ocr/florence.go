@@ -3,6 +3,7 @@ package ocr
 import (
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // Florence-2 Task Types
@@ -22,6 +23,7 @@ const (
 	// FlorenceOCR extracts text from the image
 	FlorenceOCR FlorenceTask = "What is the text in the image?"
 	// FlorenceOCRWithRegion extracts text with bounding box regions
+	// Note: Location tokens may not work in ONNX mode; use FlorenceOCR with line break reconstruction
 	FlorenceOCRWithRegion FlorenceTask = "What is the text in the image, with regions?"
 	// FlorenceObjectDetection detects objects in the image
 	FlorenceObjectDetection FlorenceTask = "Locate the objects with category name in the image."
@@ -54,10 +56,38 @@ func FlorenceDocVQAPrompt(question string) string {
 	return "<DocVQA>" + question
 }
 
-// FlorenceParseOCR extracts text from Florence-2 OCR output.
-// Florence OCR output is typically just the extracted text.
+// FlorenceParseOCR extracts text from Florence-2 OCR output and reconstructs line breaks.
+// Florence-2 outputs concatenated text without newlines. This function uses heuristics
+// to detect line breaks:
+// - When a lowercase letter is immediately followed by an uppercase letter (e.g., "headingThis")
+// - When sentence-ending punctuation is immediately followed by an uppercase letter (e.g., "end.Next")
 func FlorenceParseOCR(text string) string {
-	return strings.TrimSpace(text)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return text
+	}
+
+	// Insert newlines at likely line break positions
+	var result strings.Builder
+	runes := []rune(text)
+
+	for i, r := range runes {
+		result.WriteRune(r)
+
+		if i < len(runes)-1 {
+			next := runes[i+1]
+			// Lowercase followed by uppercase (e.g., "textNext")
+			if unicode.IsLower(r) && unicode.IsUpper(next) {
+				result.WriteRune('\n')
+			}
+			// Sentence-ending punctuation followed by uppercase (e.g., "end.Next" or "done!Start")
+			if (r == '.' || r == '!' || r == '?') && unicode.IsUpper(next) {
+				result.WriteRune('\n')
+			}
+		}
+	}
+
+	return result.String()
 }
 
 // FlorenceOCRResult represents OCR output with optional bounding boxes
