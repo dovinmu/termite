@@ -259,20 +259,14 @@ func TestTrOCRWithPDFPage(t *testing.T) {
 		t.Skip("Skipping PDF OCR test in short mode")
 	}
 
-	pdfPath := filepath.Join("..", "..", "examples", "epstein", "epstein-docs", "court-2024-giuffre-v-maxwell.pdf")
-	if _, err := os.Stat(pdfPath); os.IsNotExist(err) {
-		t.Skip("Epstein PDF not found at:", pdfPath)
+	pageImagePath := filepath.Join("testdata", "court-page-19.png")
+	if _, err := os.Stat(pageImagePath); os.IsNotExist(err) {
+		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
 
 	modelPath := filepath.Join("..", "models", "trocr-base-printed")
 	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
 		t.Skip("TrOCR model not found at:", modelPath)
-	}
-
-	// Render PDF page
-	pageImagePath := filepath.Join(t.TempDir(), "page.png")
-	if err := renderPDFPage(t, pdfPath, 19, pageImagePath); err != nil {
-		t.Skipf("Could not render PDF: %v", err)
 	}
 
 	// Create Reader
@@ -281,7 +275,7 @@ func TestTrOCRWithPDFPage(t *testing.T) {
 	require.NoError(t, err, "Failed to create Reader")
 	defer reader.Close()
 
-	// Load and process image
+	// Load pre-rendered image
 	f, err := os.Open(pageImagePath)
 	require.NoError(t, err)
 	defer f.Close()
@@ -397,9 +391,9 @@ func TestDonutWithPDFPage(t *testing.T) {
 		t.Skip("Skipping PDF Donut test in short mode")
 	}
 
-	pdfPath := filepath.Join("..", "..", "examples", "epstein", "epstein-docs", "court-2024-giuffre-v-maxwell.pdf")
-	if _, err := os.Stat(pdfPath); os.IsNotExist(err) {
-		t.Skip("Epstein PDF not found at:", pdfPath)
+	pageImagePath := filepath.Join("testdata", "court-page-20.png")
+	if _, err := os.Stat(pageImagePath); os.IsNotExist(err) {
+		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
 
 	modelPath := filepath.Join("..", "models", "donut-cord-v2")
@@ -407,15 +401,8 @@ func TestDonutWithPDFPage(t *testing.T) {
 		t.Skip("Donut model not found at:", modelPath)
 	}
 
-	// Render PDF page
-	tempDir := t.TempDir()
-	outputPath := filepath.Join(tempDir, "page.png")
-	if err := renderPDFPage(t, pdfPath, 20, outputPath); err != nil {
-		t.Skipf("Could not render PDF: %v", err)
-	}
-
-	// Load image
-	imgFile, err := os.Open(outputPath)
+	// Load pre-rendered image
+	imgFile, err := os.Open(pageImagePath)
 	require.NoError(t, err)
 	defer imgFile.Close()
 
@@ -450,22 +437,15 @@ func TestDocVQAWithPDFPage(t *testing.T) {
 		t.Skip("Skipping PDF DocVQA test in short mode")
 	}
 
-	pdfPath := filepath.Join("..", "..", "examples", "epstein", "epstein-docs", "court-2024-giuffre-v-maxwell.pdf")
-	if _, err := os.Stat(pdfPath); os.IsNotExist(err) {
-		t.Skip("Epstein PDF not found at:", pdfPath)
+	pageImagePath := filepath.Join("testdata", "court-page-1.png")
+	if _, err := os.Stat(pageImagePath); os.IsNotExist(err) {
+		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
 
 	modelPath := ensureHuggingFaceModel(t, "Xenova/donut-base-finetuned-docvqa", "Xenova/donut-base-finetuned-docvqa", ModelTypeGenerator)
 
-	// Render PDF page
-	tempDir := t.TempDir()
-	outputPath := filepath.Join(tempDir, "page.png")
-	if err := renderPDFPage(t, pdfPath, 1, outputPath); err != nil {
-		t.Skipf("Could not render PDF: %v", err)
-	}
-
-	// Load image
-	imgFile, err := os.Open(outputPath)
+	// Load pre-rendered image
+	imgFile, err := os.Open(pageImagePath)
 	require.NoError(t, err)
 	defer imgFile.Close()
 
@@ -511,22 +491,15 @@ func TestFlorence2WithPDFPage(t *testing.T) {
 		t.Skip("Skipping PDF Florence-2 test in short mode")
 	}
 
-	pdfPath := filepath.Join("..", "..", "examples", "epstein", "epstein-docs", "court-2024-giuffre-v-maxwell.pdf")
-	if _, err := os.Stat(pdfPath); os.IsNotExist(err) {
-		t.Skip("Epstein PDF not found at:", pdfPath)
+	pageImagePath := filepath.Join("testdata", "court-page-1.png")
+	if _, err := os.Stat(pageImagePath); os.IsNotExist(err) {
+		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
 
 	modelPath := ensureHuggingFaceModel(t, "onnx-community/Florence-2-base-ft", "onnx-community/Florence-2-base-ft", ModelTypeGenerator)
 
-	// Render PDF page
-	tempDir := t.TempDir()
-	outputPath := filepath.Join(tempDir, "page.png")
-	if err := renderPDFPage(t, pdfPath, 1, outputPath); err != nil {
-		t.Skipf("Could not render PDF: %v", err)
-	}
-
-	// Load image
-	imgFile, err := os.Open(outputPath)
+	// Load pre-rendered image
+	imgFile, err := os.Open(pageImagePath)
 	require.NoError(t, err)
 	defer imgFile.Close()
 
