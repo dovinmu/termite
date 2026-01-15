@@ -42,6 +42,9 @@ import (
 const (
 	trocrModelRepo = "Xenova/trocr-base-printed"
 	trocrModelName = "Xenova/trocr-base-printed"
+
+	donutCordRepo = "Xenova/donut-base-finetuned-cord-v2"
+	donutCordName = "Xenova/donut-base-finetuned-cord-v2"
 )
 
 // TrOCRConfig holds the model configuration
@@ -135,7 +138,7 @@ func TestTrOCRModelDownload(t *testing.T) {
 		t.Skip("Skipping TrOCR download test in short mode")
 	}
 
-	modelPath := ensureHuggingFaceModel(t, trocrModelName, trocrModelRepo, ModelTypeGenerator)
+	modelPath := ensureHuggingFaceModel(t, trocrModelName, trocrModelRepo, ModelTypeReader)
 
 	requiredFiles := []string{"tokenizer.json", "config.json"}
 	for _, file := range requiredFiles {
@@ -173,7 +176,7 @@ func TestTrOCRReader(t *testing.T) {
 		t.Skip("Skipping TrOCR reader test in short mode")
 	}
 
-	modelPath := ensureHuggingFaceModel(t, trocrModelName, trocrModelRepo, ModelTypeGenerator)
+	modelPath := ensureHuggingFaceModel(t, trocrModelName, trocrModelRepo, ModelTypeReader)
 
 	// Check for ONNX files
 	onnxDir := filepath.Join(modelPath, "onnx")
@@ -218,24 +221,13 @@ func TestTrOCRReader(t *testing.T) {
 	t.Logf("TrOCR output: %q", results[0].Text)
 }
 
-// TestTrOCRExportedModel tests a locally exported TrOCR model
+// TestTrOCRExportedModel tests TrOCR model from HuggingFace
 func TestTrOCRExportedModel(t *testing.T) {
 	if testing.Short() {
-		t.Skip("Skipping exported TrOCR model test in short mode")
+		t.Skip("Skipping TrOCR model test in short mode")
 	}
 
-	modelPath := filepath.Join("..", "models", "trocr-base-printed")
-	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
-		t.Skip("Locally exported TrOCR model not found at:", modelPath)
-	}
-
-	if !fileExists(filepath.Join(modelPath, "encoder_model.onnx")) {
-		t.Skip("Encoder not found")
-	}
-	if !fileExists(filepath.Join(modelPath, "decoder_model.onnx")) ||
-		!fileExists(filepath.Join(modelPath, "decoder_with_past_model.onnx")) {
-		t.Skip("Split decoder models not found")
-	}
+	modelPath := ensureHuggingFaceModel(t, trocrModelName, trocrModelRepo, ModelTypeReader)
 
 	logger := zap.NewNop()
 	reader, err := reading.NewPooledHugotReader(modelPath, 1, logger)
@@ -264,10 +256,7 @@ func TestTrOCRWithPDFPage(t *testing.T) {
 		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
 
-	modelPath := filepath.Join("..", "models", "trocr-base-printed")
-	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
-		t.Skip("TrOCR model not found at:", modelPath)
-	}
+	modelPath := ensureHuggingFaceModel(t, trocrModelName, trocrModelRepo, ModelTypeReader)
 
 	// Create Reader
 	logger := zap.NewNop()
@@ -344,23 +333,13 @@ func TestDonutFieldParsing(t *testing.T) {
 	}
 }
 
-// TestDonutExportedModel tests a locally exported Donut model
+// TestDonutExportedModel tests Donut model from HuggingFace
 func TestDonutExportedModel(t *testing.T) {
 	if testing.Short() {
-		t.Skip("Skipping exported Donut model test in short mode")
+		t.Skip("Skipping Donut model test in short mode")
 	}
 
-	modelPath := filepath.Join("..", "models", "donut-cord-v2")
-	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
-		t.Skip("Locally exported Donut model not found at:", modelPath)
-	}
-
-	if !fileExists(filepath.Join(modelPath, "encoder_model.onnx")) {
-		t.Skip("Encoder ONNX not found")
-	}
-	if !fileExists(filepath.Join(modelPath, "decoder_model.onnx")) {
-		t.Skip("Decoder ONNX not found")
-	}
+	modelPath := ensureHuggingFaceModel(t, donutCordName, donutCordRepo, ModelTypeReader)
 
 	logger := zap.NewNop()
 	reader, err := reading.NewPooledHugotReader(modelPath, 1, logger)
@@ -396,10 +375,7 @@ func TestDonutWithPDFPage(t *testing.T) {
 		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
 
-	modelPath := filepath.Join("..", "models", "donut-cord-v2")
-	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
-		t.Skip("Donut model not found at:", modelPath)
-	}
+	modelPath := ensureHuggingFaceModel(t, donutCordName, donutCordRepo, ModelTypeReader)
 
 	// Load pre-rendered image
 	imgFile, err := os.Open(pageImagePath)
@@ -442,7 +418,7 @@ func TestDocVQAWithPDFPage(t *testing.T) {
 		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
 
-	modelPath := ensureHuggingFaceModel(t, "Xenova/donut-base-finetuned-docvqa", "Xenova/donut-base-finetuned-docvqa", ModelTypeGenerator)
+	modelPath := ensureHuggingFaceModel(t, "Xenova/donut-base-finetuned-docvqa", "Xenova/donut-base-finetuned-docvqa", ModelTypeReader)
 
 	// Load pre-rendered image
 	imgFile, err := os.Open(pageImagePath)
@@ -496,7 +472,7 @@ func TestFlorence2WithPDFPage(t *testing.T) {
 		t.Skip("Pre-rendered page image not found at:", pageImagePath)
 	}
 
-	modelPath := ensureHuggingFaceModel(t, "onnx-community/Florence-2-base-ft", "onnx-community/Florence-2-base-ft", ModelTypeGenerator)
+	modelPath := ensureHuggingFaceModel(t, "onnx-community/Florence-2-base-ft", "onnx-community/Florence-2-base-ft", ModelTypeReader)
 
 	// Load pre-rendered image
 	imgFile, err := os.Open(pageImagePath)
