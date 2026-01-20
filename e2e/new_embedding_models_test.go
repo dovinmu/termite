@@ -19,7 +19,6 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"testing"
 	"time"
@@ -71,13 +70,15 @@ const (
 	stellaEmbeddingDim = 1024
 	stellaMaxSeqLen    = 8192
 
-	// gemma-embedding-308m: Compact multilingual embeddings
-	// Downloaded from HuggingFace: google/gemma-embedding-308m
-	gemmaEmbedHFRepo       = "google/gemma-embedding-308m"
-	gemmaEmbedLocalName    = "gemma-embedding-308m"
-	gemmaEmbedModelName    = "google/gemma-embedding-308m"
-	gemmaEmbedEmbeddingDim = 2048
-	gemmaEmbedMaxSeqLen    = 8192
+	// embeddinggemma-300m: Compact multilingual embeddings
+	// Downloaded from HuggingFace: onnx-community/embeddinggemma-300m-ONNX
+	// Note: We use the ONNX community version which has pre-exported ONNX files
+	// The original google/embeddinggemma-300m only has safetensors format
+	gemmaEmbedHFRepo       = "onnx-community/embeddinggemma-300m-ONNX"
+	gemmaEmbedLocalName    = "embeddinggemma-300m-ONNX"
+	gemmaEmbedModelName    = "onnx-community/embeddinggemma-300m-ONNX"
+	gemmaEmbedEmbeddingDim = 768
+	gemmaEmbedMaxSeqLen    = 2048
 )
 
 // TestNomicEmbedTextV15E2E tests the nomic-embed-text-v1.5 embedding model.
@@ -584,24 +585,4 @@ func testMultilingualSimilarity(t *testing.T, ctx context.Context, c *client.Ter
 	if enZhSim < minExpectedSim {
 		t.Logf("Warning: English-Chinese similarity %.4f is below expected %.4f", enZhSim, minExpectedSim)
 	}
-}
-
-// cosineSimilarity calculates cosine similarity between two vectors
-func cosineSimilarity(a, b []float32) float64 {
-	if len(a) != len(b) {
-		return 0
-	}
-
-	var dotProduct, normA, normB float64
-	for i := range a {
-		dotProduct += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-
-	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
 }

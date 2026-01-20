@@ -289,15 +289,17 @@
       ]
     },
     {
-      "name": "gemma-embedding-308m",
-      "owner": "google",
+      "name": "embeddinggemma-300m-ONNX",
+      "owner": "onnx-community",
       "type": "embedder",
-      "description": "Compact multilingual embeddings optimized for edge deployment. 100+ languages, runs on less than 200MB RAM with quantization.",
-      "source": "google/gemma-embedding-308m",
-      "size": 1232000000,
+      "description": "Compact multilingual embeddings optimized for edge deployment. 100+ languages, 768 dims with Matryoshka support. Community ONNX export of Google's EmbeddingGemma.",
+      "source": "onnx-community/embeddinggemma-300m-ONNX",
+      "size": 1270000000,
       "variants": [
-        "f16",
-        "i8"
+        "fp16",
+        "q4",
+        "q4f16",
+        "quantized"
       ],
       "backends": [
         "onnx"

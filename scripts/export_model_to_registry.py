@@ -185,12 +185,24 @@ EMBEDDER_MODEL_CONFIGS = {
         "instruction_following": True,
         "default_instruction": "Represent this sentence for searching relevant passages: ",
     },
-    "google/gemma-embedding-308m": {
-        "dimensions": 2048,
-        "max_seq_length": 8192,
-        "matryoshka_dims": [2048, 1024, 512, 256, 128],
+    # Note: google/embeddinggemma-300m doesn't have ONNX exports
+    # Use onnx-community/embeddinggemma-300m-ONNX instead for direct pull
+    # Or export from google/embeddinggemma-300m using this script
+    "google/embeddinggemma-300m": {
+        "dimensions": 768,
+        "max_seq_length": 2048,
+        "matryoshka_dims": [768, 512, 256, 128],
         "pooling_method": "mean",
         "multilingual": True,
+        "trust_remote_code": True,  # Gated model, requires HF_TOKEN
+    },
+    "onnx-community/embeddinggemma-300m-ONNX": {
+        "dimensions": 768,
+        "max_seq_length": 2048,
+        "matryoshka_dims": [768, 512, 256, 128],
+        "pooling_method": "mean",
+        "multilingual": True,
+        # ONNX community version - pre-exported, no HF auth required
     },
 }
 
