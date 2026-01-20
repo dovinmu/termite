@@ -296,7 +296,7 @@
       "source": "onnx-community/embeddinggemma-300m-ONNX",
       "size": 1270000000,
       "variants": [
-        "fp16",
+        "f16",
         "q4",
         "q4f16",
         "quantized"
