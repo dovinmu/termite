@@ -132,78 +132,14 @@ RECOGNIZER_CAPABILITIES = {
     "answers",    # Extractive question answering (GLiNER multitask)
 }
 
-# Embedding model-specific configurations
-# These models have special features like Matryoshka dimensions, task prefixes, etc.
-EMBEDDER_MODEL_CONFIGS = {
-    "nomic-ai/nomic-embed-text-v1.5": {
-        "dimensions": 768,
-        "max_seq_length": 8192,
-        "matryoshka_dims": [768, 512, 256, 128, 64],
-        "task_prefixes": {
-            "search_query": "search_query: ",
-            "search_document": "search_document: ",
-            "classification": "classification: ",
-            "clustering": "clustering: ",
-        },
-        "default_task": "search_document",
-        "pooling_method": "mean",
-        "trust_remote_code": True,
-    },
-    "BAAI/bge-m3": {
-        "dimensions": 1024,
-        "max_seq_length": 8192,
-        "pooling_method": "cls",
-        "multilingual": True,
-        "languages": ["en", "zh", "fr", "de", "es", "pt", "ar", "th", "ru", "ja", "ko"],
-        "retrieval_modes": ["dense"],  # sparse/colbert not supported in ONNX export
-    },
-    "Alibaba-NLP/gte-Qwen2-1.5B-instruct": {
-        "dimensions": 1536,
-        "max_seq_length": 32768,
-        "pooling_method": "last",
-        "trust_remote_code": True,
-        "instruction_following": True,
-        "default_instruction": "Given a web search query, retrieve relevant passages that answer the query",
-    },
-    "Snowflake/snowflake-arctic-embed-l-v2.0": {
-        "dimensions": 1024,
-        "max_seq_length": 8192,
-        "matryoshka_dims": [1024, 768, 512, 256],
-        "pooling_method": "cls",
-        "task_prefixes": {
-            "query": "query: ",
-            "document": "",  # No prefix for documents
-        },
-        "default_task": "document",
-    },
-    "dunzhang/stella_en_1.5B_v5": {
-        "dimensions": 1024,
-        "max_seq_length": 8192,
-        "matryoshka_dims": [1024, 512, 256, 128, 64],
-        "pooling_method": "mean",
-        "trust_remote_code": True,
-        "instruction_following": True,
-        "default_instruction": "Represent this sentence for searching relevant passages: ",
-    },
-    # Note: google/embeddinggemma-300m doesn't have ONNX exports
-    # Use onnx-community/embeddinggemma-300m-ONNX instead for direct pull
-    # Or export from google/embeddinggemma-300m using this script
-    "google/embeddinggemma-300m": {
-        "dimensions": 768,
-        "max_seq_length": 2048,
-        "matryoshka_dims": [768, 512, 256, 128],
-        "pooling_method": "mean",
-        "multilingual": True,
-        "trust_remote_code": True,  # Gated model, requires HF_TOKEN
-    },
-    "onnx-community/embeddinggemma-300m-ONNX": {
-        "dimensions": 768,
-        "max_seq_length": 2048,
-        "matryoshka_dims": [768, 512, 256, 128],
-        "pooling_method": "mean",
-        "multilingual": True,
-        # ONNX community version - pre-exported, no HF auth required
-    },
+# Models that require trust_remote_code=True for ONNX export
+# Most embedding models have pre-exported ONNX on HuggingFace and can be pulled directly.
+# This list is only needed when exporting models that don't have ONNX exports.
+TRUST_REMOTE_CODE_MODELS = {
+    "nomic-ai/nomic-embed-text-v1.5",
+    "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
+    "dunzhang/stella_en_1.5B_v5",
+    "google/embeddinggemma-300m",  # Gated model, also requires HF_TOKEN
 }
 
 # Model type to ORT class mapping
@@ -259,7 +195,6 @@ MANIFEST_FILES = [
     "tokenizer_config.json",
     "special_tokens_map.json",
     "vocab.txt",
-    "embedder_config.json",  # Embedder-specific config (Matryoshka dims, task prefixes, etc.)
 ]
 
 # Additional files for multimodal models
@@ -546,12 +481,10 @@ def export_model(
     logger.info(f"Exporting {model_type}: {model_id}")
     logger.info(f"Output: {output_dir}")
 
-    # Check if model has special configuration
-    embedder_config = EMBEDDER_MODEL_CONFIGS.get(model_id, {})
-    trust_remote_code = embedder_config.get("trust_remote_code", False)
-
+    # Check if model requires trust_remote_code
+    trust_remote_code = model_id in TRUST_REMOTE_CODE_MODELS
     if trust_remote_code:
-        logger.info(f"Model requires trust_remote_code=True")
+        logger.info("Model requires trust_remote_code=True")
 
     # Get the appropriate ORT class
     ort_class = get_ort_model_class(model_type)
@@ -565,10 +498,6 @@ def export_model(
     logger.info("Saving tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
     tokenizer.save_pretrained(output_dir)
-
-    # Generate embedder_config.json if this is an embedder with special config
-    if model_type == "embedder" and embedder_config:
-        generate_embedder_config(model_id, output_dir, embedder_config)
 
     # Create int8 quantized variant if requested (must be done BEFORE fp16 to avoid multi-file issue)
     if "i8" in variants:
@@ -598,59 +527,6 @@ def export_model(
             logger.warning(f"FP16 conversion failed: {e}")
 
     return output_dir
-
-
-def generate_embedder_config(model_id: str, output_dir: Path, config: dict) -> None:
-    """
-    Generate embedder_config.json with model-specific metadata.
-
-    This file contains information about special features like:
-    - Matryoshka dimensions (variable-length embeddings)
-    - Task prefixes (search_query, search_document, etc.)
-    - Multilingual support
-    - Instruction-following capabilities
-
-    Args:
-        model_id: HuggingFace model ID
-        output_dir: Directory to save the config
-        config: Model configuration from EMBEDDER_MODEL_CONFIGS
-    """
-    embedder_config = {
-        "model_id": model_id,
-        "dimensions": config.get("dimensions"),
-        "max_seq_length": config.get("max_seq_length"),
-        "pooling_method": config.get("pooling_method", "mean"),
-    }
-
-    # Add optional fields if present
-    if "matryoshka_dims" in config:
-        embedder_config["matryoshka_dims"] = config["matryoshka_dims"]
-        logger.info(f"  Matryoshka dimensions: {config['matryoshka_dims']}")
-
-    if "task_prefixes" in config:
-        embedder_config["task_prefixes"] = config["task_prefixes"]
-        embedder_config["default_task"] = config.get("default_task", list(config["task_prefixes"].keys())[0])
-        logger.info(f"  Task prefixes: {list(config['task_prefixes'].keys())}")
-
-    if config.get("multilingual"):
-        embedder_config["multilingual"] = True
-        if "languages" in config:
-            embedder_config["languages"] = config["languages"]
-        logger.info(f"  Multilingual support enabled")
-
-    if config.get("instruction_following"):
-        embedder_config["instruction_following"] = True
-        if "default_instruction" in config:
-            embedder_config["default_instruction"] = config["default_instruction"]
-        logger.info(f"  Instruction-following enabled")
-
-    if "retrieval_modes" in config:
-        embedder_config["retrieval_modes"] = config["retrieval_modes"]
-
-    config_path = output_dir / "embedder_config.json"
-    with open(config_path, "w") as f:
-        json.dump(embedder_config, f, indent=2)
-    logger.info(f"  Saved: embedder_config.json")
 
 
 def export_multimodal_model(
