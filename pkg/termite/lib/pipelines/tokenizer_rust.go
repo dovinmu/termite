@@ -126,6 +126,9 @@ func (t *rustTokenizer) Close() error {
 }
 
 // rustTokenizerAvailable returns true when the Rust tokenizer is available.
+// Set TOKENIZER_BACKEND=go to force the pure Go tokenizer.
+// Valid values: "rust" (default), "go"
 func rustTokenizerAvailable() bool {
-	return true
+	backend := os.Getenv("TOKENIZER_BACKEND")
+	return backend != "go"
 }

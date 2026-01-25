@@ -279,8 +279,23 @@ func (ap *AudioProcessor) computeMelSpectrogram(samples []float32) ([]float32, i
 		samples = samples[:targetLen]
 	}
 
-	// Calculate number of frames
-	numFrames := (len(samples) - nFft) / hopLength + 1
+	// Whisper uses center=True STFT, which pads by nFft//2 on each side
+	// This gives exactly n_samples / hop_length frames
+	padAmount := nFft / 2
+	paddedSamples := make([]float32, len(samples)+2*padAmount)
+	// Fill with padding value (zeros)
+	for i := 0; i < padAmount; i++ {
+		paddedSamples[i] = ap.Config.PaddingValue
+	}
+	copy(paddedSamples[padAmount:], samples)
+	for i := padAmount + len(samples); i < len(paddedSamples); i++ {
+		paddedSamples[i] = ap.Config.PaddingValue
+	}
+	samples = paddedSamples
+
+	// Calculate number of frames: exactly n_samples / hop_length for Whisper
+	// (original samples length before center padding)
+	numFrames := targetLen / hopLength
 	if numFrames < 1 {
 		numFrames = 1
 	}
