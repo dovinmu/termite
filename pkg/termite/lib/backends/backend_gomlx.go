@@ -25,8 +25,8 @@ import (
 	"github.com/gomlx/gomlx/pkg/core/graph"
 	"github.com/gomlx/gomlx/pkg/core/tensors"
 	mlctx "github.com/gomlx/gomlx/pkg/ml/context"
-	hfmodels "github.com/gomlx/huggingface-gomlx"
-	"github.com/gomlx/huggingface-gomlx/architectures/bert"
+	hfmodels "github.com/ajroetker/huggingface-gomlx"
+	"github.com/ajroetker/huggingface-gomlx/architectures/bert"
 	"github.com/gomlx/onnx-gomlx/onnx"
 
 	// Import Go backend - always available (pure Go, no CGO)
@@ -507,17 +507,42 @@ func (m *onnxModel) forward(ctx context.Context, inputIDs [][]int32, attentionMa
 	inputIDsTensor := tensors.FromFlatDataAndDimensions(flatInputIDs, batchSize, seqLen)
 	attentionMaskTensor := tensors.FromFlatDataAndDimensions(flatAttentionMask, batchSize, seqLen)
 
+	// Check if model requires token_type_ids (used by BERT-based models)
+	var tokenTypeIdsTensor *tensors.Tensor
+	inputNames, _ := m.onnxModel.Inputs()
+	needsTokenTypeIds := false
+	for _, name := range inputNames {
+		if name == "token_type_ids" {
+			needsTokenTypeIds = true
+			break
+		}
+	}
+	if needsTokenTypeIds {
+		// Create zeros tensor for token_type_ids (same shape as input_ids)
+		flatTokenTypeIds := make([]int64, batchSize*seqLen) // zeros by default
+		tokenTypeIdsTensor = tensors.FromFlatDataAndDimensions(flatTokenTypeIds, batchSize, seqLen)
+	}
+
 	// Build the ONNX graph function
 	graphFn := func(mlCtx *mlctx.Context, inputs []*graph.Node) []*graph.Node {
 		inputMap := map[string]*graph.Node{
 			"input_ids":      inputs[0],
 			"attention_mask": inputs[1],
 		}
+		if len(inputs) > 2 {
+			inputMap["token_type_ids"] = inputs[2]
+		}
 		return m.onnxModel.CallGraph(mlCtx.Reuse(), inputs[0].Graph(), inputMap)
 	}
 
-	// Execute
-	results, err := mlctx.ExecOnceN(m.engine, m.ctx, graphFn, inputIDsTensor, attentionMaskTensor)
+	// Execute with the appropriate inputs
+	var results []*tensors.Tensor
+	var err error
+	if tokenTypeIdsTensor != nil {
+		results, err = mlctx.ExecOnceN(m.engine, m.ctx, graphFn, inputIDsTensor, attentionMaskTensor, tokenTypeIdsTensor)
+	} else {
+		results, err = mlctx.ExecOnceN(m.engine, m.ctx, graphFn, inputIDsTensor, attentionMaskTensor)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("exec failed: %w", err)
 	}

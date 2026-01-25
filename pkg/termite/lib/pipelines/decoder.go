@@ -191,9 +191,10 @@ func (g *Generator) Generate(
 			}
 			// Force continue - set EOS logits to -inf and resample
 			logits[g.EOSTokenID] = float32(math.Inf(-1))
+			oldLogProb := logProb
 			nextToken, logProb = g.selectNextTokenWithProb(logits, state.GeneratedTokens)
 			// Replace the EOS log prob with the new token's log prob
-			cumulativeLogProb = cumulativeLogProb - logProb + logProb // Already subtracted above, re-add
+			cumulativeLogProb = cumulativeLogProb - oldLogProb + logProb
 		}
 
 		// Append token

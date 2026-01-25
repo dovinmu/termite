@@ -1,6 +1,6 @@
 module github.com/antflydb/termite/pkg/proxy
 
-go 1.25.0
+go 1.26rc2
 
 require (
 	github.com/antflydb/antfly-go/libaf v0.0.0-20260119040111-36db55706c38

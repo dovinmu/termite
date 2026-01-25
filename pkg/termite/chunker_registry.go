@@ -51,6 +51,10 @@ type ChunkerRegistry struct {
 	// Loaded models with TTL cache
 	cache *ttlcache.Cache[string, chunking.Chunker]
 
+	// Reference counting to prevent eviction during active use
+	refCounts   map[string]int
+	refCountsMu sync.Mutex
+
 	// Configuration
 	keepAlive       time.Duration
 	maxLoadedModels uint64
@@ -90,6 +94,7 @@ func NewChunkerRegistry(
 		sessionManager:  sessionManager,
 		logger:          logger,
 		discovered:      make(map[string]*ChunkerModelInfo),
+		refCounts:       make(map[string]int),
 		keepAlive:       keepAlive,
 		maxLoadedModels: config.MaxLoadedModels,
 		poolSize:        poolSize,
@@ -125,6 +130,24 @@ func NewChunkerRegistry(
 		case ttlcache.EvictionReasonCapacityReached:
 			reasonStr = "capacity reached (LRU eviction)"
 		}
+
+		// Check if model is still in use (has active references)
+		// Hold lock through check-and-action to prevent race with Release()
+		registry.refCountsMu.Lock()
+		refCount := registry.refCounts[item.Key()]
+		if refCount > 0 {
+			// Re-add while still holding lock to prevent race with Release()
+			registry.cache.Set(item.Key(), item.Value(), registry.keepAlive)
+			registry.refCountsMu.Unlock()
+			// Model is still in use - re-added to cache to prevent closing
+			logger.Warn("Preventing eviction of chunker model with active references",
+				zap.String("model", item.Key()),
+				zap.Int("refCount", refCount),
+				zap.String("reason", reasonStr))
+			return
+		}
+		registry.refCountsMu.Unlock()
+
 		logger.Info("Evicting chunker model from cache",
 			zap.String("model", item.Key()),
 			zap.String("reason", reasonStr))
@@ -224,7 +247,10 @@ func (r *ChunkerRegistry) discoverModels() error {
 	return nil
 }
 
-// Get returns a chunker by name, loading it if necessary
+// Get returns a chunker by name, loading it if necessary.
+// DEPRECATED: Use Acquire() instead for long-running operations to prevent
+// the model from being evicted during use. Get() does not track usage and
+// the returned chunker may be closed if the cache evicts it.
 func (r *ChunkerRegistry) Get(modelName string) (chunking.Chunker, error) {
 	// Check cache first
 	if item := r.cache.Get(modelName); item != nil {
@@ -243,6 +269,42 @@ func (r *ChunkerRegistry) Get(modelName string) (chunking.Chunker, error) {
 
 	// Load the model
 	return r.loadModel(info)
+}
+
+// Acquire returns a chunker by name and increments its reference count.
+// The caller MUST call Release() when done to allow the model to be evicted.
+// This prevents the model from being closed while in use.
+func (r *ChunkerRegistry) Acquire(modelName string) (chunking.Chunker, error) {
+	chunker, err := r.Get(modelName)
+	if err != nil {
+		return nil, err
+	}
+
+	r.refCountsMu.Lock()
+	r.refCounts[modelName]++
+	count := r.refCounts[modelName]
+	r.refCountsMu.Unlock()
+
+	r.logger.Debug("Acquired chunker model",
+		zap.String("model", modelName),
+		zap.Int("refCount", count))
+
+	return chunker, nil
+}
+
+// Release decrements the reference count for a model.
+// Must be called after Acquire() when the caller is done using the chunker.
+func (r *ChunkerRegistry) Release(modelName string) {
+	r.refCountsMu.Lock()
+	if r.refCounts[modelName] > 0 {
+		r.refCounts[modelName]--
+	}
+	count := r.refCounts[modelName]
+	r.refCountsMu.Unlock()
+
+	r.logger.Debug("Released chunker model",
+		zap.String("model", modelName),
+		zap.Int("refCount", count))
 }
 
 // loadModel loads a chunker model from disk

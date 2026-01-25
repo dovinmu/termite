@@ -72,6 +72,10 @@ type NERRegistry struct {
 	// Loaded models with TTL cache
 	cache *ttlcache.Cache[string, *loadedNERModel]
 
+	// Reference counting to prevent eviction during active use
+	refCounts   map[string]int
+	refCountsMu sync.Mutex
+
 	// Configuration
 	keepAlive       time.Duration
 	maxLoadedModels uint64
@@ -111,6 +115,7 @@ func NewNERRegistry(
 		sessionManager:  sessionManager,
 		logger:          logger,
 		discovered:      make(map[string]*NERModelInfo),
+		refCounts:       make(map[string]int),
 		keepAlive:       keepAlive,
 		maxLoadedModels: config.MaxLoadedModels,
 		poolSize:        poolSize,
@@ -146,6 +151,23 @@ func NewNERRegistry(
 		case ttlcache.EvictionReasonCapacityReached:
 			reasonStr = "capacity reached (LRU eviction)"
 		}
+
+		// Check if model is still in use (has active references)
+		// Hold lock through check-and-action to prevent race with Release()
+		registry.refCountsMu.Lock()
+		refCount := registry.refCounts[item.Key()]
+		if refCount > 0 {
+			// Re-add while still holding lock to prevent race with Release()
+			registry.cache.Set(item.Key(), item.Value(), registry.keepAlive)
+			registry.refCountsMu.Unlock()
+			logger.Warn("Preventing eviction of NER model with active references",
+				zap.String("model", item.Key()),
+				zap.Int("refCount", refCount),
+				zap.String("reason", reasonStr))
+			return
+		}
+		registry.refCountsMu.Unlock()
+
 		logger.Info("Evicting NER model from cache",
 			zap.String("model", item.Key()),
 			zap.String("reason", reasonStr))
@@ -359,6 +381,42 @@ func (r *NERRegistry) getLoaded(modelName string) (*loadedNERModel, error) {
 
 	// Load the model
 	return r.loadModel(info)
+}
+
+// Acquire returns a NER model by name and increments its reference count.
+// The caller MUST call Release() when done to allow the model to be evicted.
+// This prevents the model from being closed while in use.
+func (r *NERRegistry) Acquire(modelName string) (*loadedNERModel, error) {
+	loaded, err := r.getLoaded(modelName)
+	if err != nil {
+		return nil, err
+	}
+
+	r.refCountsMu.Lock()
+	r.refCounts[modelName]++
+	count := r.refCounts[modelName]
+	r.refCountsMu.Unlock()
+
+	r.logger.Debug("Acquired NER model",
+		zap.String("model", modelName),
+		zap.Int("refCount", count))
+
+	return loaded, nil
+}
+
+// Release decrements the reference count for a model.
+// Must be called after Acquire() when the caller is done using the NER model.
+func (r *NERRegistry) Release(modelName string) {
+	r.refCountsMu.Lock()
+	if r.refCounts[modelName] > 0 {
+		r.refCounts[modelName]--
+	}
+	count := r.refCounts[modelName]
+	r.refCountsMu.Unlock()
+
+	r.logger.Debug("Released NER model",
+		zap.String("model", modelName),
+		zap.Int("refCount", count))
 }
 
 // loadModel loads a NER model from disk

@@ -1,25 +1,21 @@
 module github.com/antflydb/termite/pkg/termite
 
-go 1.25.0
+go 1.26rc2
 
 replace github.com/gomlx/gomlx => github.com/timkaye11/gomlx v0.0.0-20251221044952-ee84bc4bbaf7
 
 replace github.com/gomlx/onnx-gomlx => github.com/timkaye11/onnx-gomlx v0.0.0-20251217194823-a871bb8cc687
 
-replace github.com/gomlx/go-huggingface => github.com/ajroetker/go-huggingface v0.0.0-20260123190324-319caa495581
-
-replace github.com/gomlx/huggingface-gomlx => github.com/ajroetker/huggingface-gomlx v0.0.0-20260121234043-da2982a79c4a
-
 require (
+	github.com/ajroetker/huggingface-gomlx v0.0.0-20260125071513-bbe694562131
 	github.com/antflydb/antfly-go/libaf v0.0.0-20260119040111-36db55706c38
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/daulet/tokenizers v1.24.0
-	github.com/eliben/go-sentencepiece v0.6.0
+	github.com/eliben/go-sentencepiece v0.7.0
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/goccy/go-json v0.10.2
-	github.com/gomlx/go-huggingface v0.3.1
+	github.com/gomlx/go-huggingface v0.3.2-0.20260125064416-b0f56ca7fbef
 	github.com/gomlx/gomlx v0.26.1-0.20260114072028-dd1b582c66f7
-	github.com/gomlx/huggingface-gomlx v0.0.0
 	github.com/gomlx/onnx-gomlx v0.3.4
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/knights-analytics/ortgenai v0.0.3

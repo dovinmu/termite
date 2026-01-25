@@ -1,6 +1,6 @@
 module github.com/antflydb/termite/e2e
 
-go 1.25.0
+go 1.26rc2
 
 require (
 	github.com/antflydb/antfly-go/libaf v0.0.0-20260119040111-36db55706c38
@@ -11,6 +11,7 @@ require (
 )
 
 require (
+	github.com/ajroetker/huggingface-gomlx v0.0.0-20260125071513-bbe694562131 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -18,7 +19,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/eliben/go-sentencepiece v0.6.0 // indirect
+	github.com/eliben/go-sentencepiece v0.7.0 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/getkin/kin-openapi v0.133.0 // indirect
 	github.com/go-ini/ini v1.67.0 // indirect
@@ -27,10 +28,9 @@ require (
 	github.com/go-openapi/swag/jsonname v0.25.4 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/gomlx/exceptions v0.0.3 // indirect
-	github.com/gomlx/go-huggingface v0.3.1 // indirect
+	github.com/gomlx/go-huggingface v0.3.2-0.20260125064416-b0f56ca7fbef // indirect
 	github.com/gomlx/go-xla v0.1.4 // indirect
 	github.com/gomlx/gomlx v0.26.1-0.20260114072028-dd1b582c66f7 // indirect
-	github.com/gomlx/huggingface-gomlx v0.0.0 // indirect
 	github.com/gomlx/onnx-gomlx v0.3.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jellydator/ttlcache/v3 v3.4.0 // indirect
@@ -90,7 +90,3 @@ replace github.com/antflydb/termite/pkg/termite => ../pkg/termite
 replace github.com/gomlx/gomlx => github.com/timkaye11/gomlx v0.0.0-20251221044952-ee84bc4bbaf7
 
 replace github.com/gomlx/onnx-gomlx => github.com/timkaye11/onnx-gomlx v0.0.0-20251217194823-a871bb8cc687
-
-replace github.com/gomlx/go-huggingface => github.com/ajroetker/go-huggingface v0.0.0-20260123190324-319caa495581
-
-replace github.com/gomlx/huggingface-gomlx => github.com/ajroetker/huggingface-gomlx v0.0.0-20260121234043-da2982a79c4a

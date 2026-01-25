@@ -7,10 +7,8 @@ codeberg.org/go-pdf/fpdf v0.10.0/go.mod h1:Y0DGRAdZ0OmnZPvjbMp/1bYxmIPxm0ws4tfoP
 git.sr.ht/~sbinet/gg v0.6.0 h1:RIzgkizAk+9r7uPzf/VfbJHBMKUr0F5hRFxTUGMnt38=
 git.sr.ht/~sbinet/gg v0.6.0/go.mod h1:uucygbfC9wVPQIfrmwM2et0imr8L7KQWywX0xpFMm94=
 github.com/RaveNoX/go-jsoncommentstrip v1.0.0/go.mod h1:78ihd09MekBnJnxpICcwzCMzGrKSKYe4AqU6PDYYpjk=
-github.com/ajroetker/go-huggingface v0.0.0-20260123190324-319caa495581 h1:s2jp8CzoI7TD9cuWbZrAyUQ0b492FrUblBuRy6KY4Ko=
-github.com/ajroetker/go-huggingface v0.0.0-20260123190324-319caa495581/go.mod h1:30lApu5rw9QY3fYaQoP49jmyYNjGXlhzQHiA6fbJvYE=
-github.com/ajroetker/huggingface-gomlx v0.0.0-20260121234043-da2982a79c4a h1:cTrwBocqvtma/unskdelpxVDsGBCoZ/REpgikDDN8OY=
-github.com/ajroetker/huggingface-gomlx v0.0.0-20260121234043-da2982a79c4a/go.mod h1:4sbJdOPAN7pqx9bbxJDxB5bUgo48O7MfIRg2hCalGBI=
+github.com/ajroetker/huggingface-gomlx v0.0.0-20260125071513-bbe694562131 h1:Mi95fLXHboyt2hlA3/8h9HMy2WN9cDfi8JYRd2eFg2s=
+github.com/ajroetker/huggingface-gomlx v0.0.0-20260125071513-bbe694562131/go.mod h1:7Jnn48nRpz5Nk1SWGgsFGPV7DHEPSAvQIVpa6rsv9HE=
 github.com/ajstarks/svgo v0.0.0-20211024235047-1546f124cd8b h1:slYM766cy2nI3BwyRiyQj/Ud48djTMtMebDqepE95rw=
 github.com/ajstarks/svgo v0.0.0-20211024235047-1546f124cd8b/go.mod h1:1KcenG0jGWcpt8ov532z81sp/kMMUG485J2InIOyADM=
 github.com/antflydb/antfly-go/libaf v0.0.0-20260119040111-36db55706c38 h1:ZxSC3bBuaj9/JSZ/KmVA4sKPl9+lA+JWCg5r/d/qJio=
@@ -37,6 +35,8 @@ github.com/charmbracelet/x/cellbuf v0.0.13/go.mod h1:xe0nKWGd3eJgtqZRaN9RjMtK7xU
 github.com/charmbracelet/x/term v0.2.1 h1:AQeHeLZ1OqSXhrAWpYUtZyX1T3zVxfpZuEQMIQaGIAQ=
 github.com/charmbracelet/x/term v0.2.1/go.mod h1:oQ4enTYFV7QN4m0i9mzHrViD7TQKvNEEkHUMCmsxdUg=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
+github.com/daulet/tokenizers v1.24.0 h1:pdT0kRPB9jYbIRxY1q82RJa9vfSbKI53YdHHNDTnvOE=
+github.com/daulet/tokenizers v1.24.0/go.mod h1:tGnMdZthXdcWY6DGD07IygpwJqiPvG85FQUnhs/wSCs=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
@@ -48,8 +48,8 @@ github.com/dprotaso/go-yit v0.0.0-20250513224043-18a80f8f6df4 h1:JzpdVajvTuXQXL1
 github.com/dprotaso/go-yit v0.0.0-20250513224043-18a80f8f6df4/go.mod h1:lHwJo6jMevQL9tNpW6vLyhkK13bYHBcoh9tUakMhbnE=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
-github.com/eliben/go-sentencepiece v0.6.0 h1:wbnefMCxYyVYmeTVtiMJet+mS9CVwq5klveLpfQLsnk=
-github.com/eliben/go-sentencepiece v0.6.0/go.mod h1:nNYk4aMzgBoI6QFp4LUG8Eu1uO9fHD9L5ZEre93o9+c=
+github.com/eliben/go-sentencepiece v0.7.0 h1:QpP9HpLXF7/TAZoskolXm7heEWkh9vpHVUgGR1AbY3o=
+github.com/eliben/go-sentencepiece v0.7.0/go.mod h1:nNYk4aMzgBoI6QFp4LUG8Eu1uO9fHD9L5ZEre93o9+c=
 github.com/emirpasic/gods v1.18.1 h1:FXtiHYKDGKCW2KzwZKx0iC0PQmdlorYgdFG9jPXJ1Bc=
 github.com/emirpasic/gods v1.18.1/go.mod h1:8tpGGwCnJ5H4r6BWwaV6OrWmMoPhUl5jm/FMNAnJvWQ=
 github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHkI4W8=
@@ -82,6 +82,8 @@ github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0/go.mod h1:E/TSTwGw
 github.com/golang/protobuf v1.2.0/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
 github.com/gomlx/exceptions v0.0.3 h1:HKnTgEjj4jlmhr8zVFkTP9qmV1ey7ypYYosQ8GzXWuM=
 github.com/gomlx/exceptions v0.0.3/go.mod h1:uHL0TQwJ0xaV2/snJOJV6hSE4yRmhhfymuYgNredGxU=
+github.com/gomlx/go-huggingface v0.3.2-0.20260125064416-b0f56ca7fbef h1:VvdOi4YQWr4P7krC0bC+Zs9RtSITt6fCO9HsgdL1TAw=
+github.com/gomlx/go-huggingface v0.3.2-0.20260125064416-b0f56ca7fbef/go.mod h1:VQem9ICYDea4CwC5uFiLLdnvF4O2YPRiu5rzoRoWnk0=
 github.com/gomlx/go-xla v0.1.4 h1:7u1RcRBuCBZefQcmcQXSrJ9PmpxXMbmszmDT4dubibw=
 github.com/gomlx/go-xla v0.1.4/go.mod h1:6OfAcL+h+es7KHz6q0Ql9Vzi5MTys99MJ7aR3Nhko/o=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=

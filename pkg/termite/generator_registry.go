@@ -123,20 +123,21 @@ func NewGeneratorRegistry(
 		}
 
 		// Check if model is still in use (has active references)
+		// Hold lock through check-and-action to prevent race with Release()
 		registry.refCountsMu.Lock()
 		refCount := registry.refCounts[item.Key()]
-		registry.refCountsMu.Unlock()
-
 		if refCount > 0 {
-			// Model is still in use - re-add to cache to prevent closing
+			// Re-add while still holding lock to prevent race with Release()
+			registry.cache.Set(item.Key(), item.Value(), registry.keepAlive)
+			registry.refCountsMu.Unlock()
+			// Model is still in use - re-added to cache to prevent closing
 			logger.Warn("Preventing eviction of generator model with active references",
 				zap.String("model", item.Key()),
 				zap.Int("refCount", refCount),
 				zap.String("reason", reasonStr))
-			// Re-add with extended TTL
-			registry.cache.Set(item.Key(), item.Value(), registry.keepAlive)
 			return
 		}
+		registry.refCountsMu.Unlock()
 
 		logger.Info("Evicting generator model from cache",
 			zap.String("model", item.Key()),
