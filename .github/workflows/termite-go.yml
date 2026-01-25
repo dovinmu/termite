@@ -67,6 +67,12 @@ jobs:
             container: "ubuntu:24.04"
 
     steps:
+      - name: Install container prerequisites
+        if: matrix.container != ''
+        run: |
+          apt-get update
+          apt-get install -y git ca-certificates curl
+
       - uses: actions/checkout@v6
 
       - name: Clone antfly-go (for OpenAPI refs)
