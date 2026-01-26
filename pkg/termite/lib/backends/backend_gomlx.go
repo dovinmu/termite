@@ -202,10 +202,15 @@ func (l *gomlxModelLoader) Load(path string, opts ...LoadOption) (Model, error) 
 		format = detectGoMLXModelFormat(path)
 	}
 
-	// Get the inference backend
-	engine, err := l.backend.engineMgr.getEngine(string(config.GoMLXBackend))
+	// Get the inference backend using the backend's engine type (go, coreml, xla)
+	// Use config.GoMLXBackend only as override if explicitly set
+	engineType := l.backend.engineType
+	if config.GoMLXBackend != "" {
+		engineType = string(config.GoMLXBackend)
+	}
+	engine, err := l.backend.engineMgr.getEngine(engineType)
 	if err != nil {
-		return nil, fmt.Errorf("getting GoMLX engine: %w", err)
+		return nil, fmt.Errorf("getting GoMLX engine %q: %w", engineType, err)
 	}
 
 	switch format {
