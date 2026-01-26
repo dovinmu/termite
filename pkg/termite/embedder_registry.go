@@ -38,7 +38,7 @@ const DefaultKeepAlive = 5 * time.Minute
 type ModelInfo struct {
 	Name             string
 	Path             string
-	OnnxFilename     string   // e.g., "model.onnx", "model_f16.onnx", "model_i8.onnx"
+	OnnxFilename     string // e.g., "model.onnx", "model_f16.onnx", "model_i8.onnx"
 	PoolSize         int
 	ModelType        string   // "embedder", "chunker", "reranker"
 	Variants         []string // Available variant IDs (e.g., ["f16", "i8"])
