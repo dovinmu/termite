@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package backends provides a unified interface for creating ML inference sessions
-// with multi-backend support. It replaces the hugot dependency with a custom stack:
+// with multi-backend support:
 //
 //   - go-huggingface: Hub download, tokenizers, safetensors parsing
 //   - huggingface-gomlx: Model architectures, GoMLX inference

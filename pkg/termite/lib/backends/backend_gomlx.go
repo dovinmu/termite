@@ -27,6 +27,7 @@ import (
 	"github.com/gomlx/gomlx/pkg/core/dtypes"
 	"github.com/gomlx/gomlx/pkg/core/graph"
 	"github.com/gomlx/gomlx/pkg/core/tensors"
+	"github.com/gomlx/gomlx/pkg/core/tensors/bucketing"
 	mlctx "github.com/gomlx/gomlx/pkg/ml/context"
 	"github.com/gomlx/onnx-gomlx/onnx"
 
@@ -38,6 +39,61 @@ func init() {
 	// Register Go backend (always available)
 	// Note: The simplego package registers itself as "go" in the backends registry
 	RegisterBackend(newGomlxBackend(BackendGo, "go"))
+}
+
+// defaultBucketStrategy is Exponential(1.4), which provides fine-grained bucketing
+// with ~40% growth between adjacent buckets (e.g., 1,2,3,4,6,8,11,15,21,29,...).
+// This balances cache efficiency against wasted padding.
+var defaultBucketStrategy = bucketing.Exponential(1.4)
+
+// bucketConfig holds resolved bucketing configuration for a model.
+type bucketConfig struct {
+	batchStrategy bucketing.Strategy
+	seqStrategy   bucketing.Strategy
+	maxCacheSize  int
+	enabled       bool
+}
+
+// resolveBucketConfig determines bucketing behavior based on the backend type and user config.
+// The Go backend has no JIT compilation cost so bucketing is disabled by default.
+// XLA and CoreML backends benefit from bucketed shapes.
+func resolveBucketConfig(backendType BackendType, config *LoadConfig) bucketConfig {
+	switch backendType {
+	case BackendGo:
+		// Pure Go backend: no JIT cost, so bucketing is unnecessary unless explicitly requested.
+		if config.BatchBucketing != nil || config.SeqBucketing != nil {
+			bc := bucketConfig{
+				batchStrategy: config.BatchBucketing,
+				seqStrategy:   config.SeqBucketing,
+				enabled:       true,
+				maxCacheSize:  config.MaxCacheSize,
+			}
+			if bc.batchStrategy == nil {
+				bc.batchStrategy = defaultBucketStrategy
+			}
+			if bc.seqStrategy == nil {
+				bc.seqStrategy = defaultBucketStrategy
+			}
+			return bc
+		}
+		return bucketConfig{enabled: false, maxCacheSize: -1}
+
+	default:
+		// XLA, CoreML, and future JIT backends: enable bucketing.
+		bc := bucketConfig{
+			batchStrategy: config.BatchBucketing,
+			seqStrategy:   config.SeqBucketing,
+			enabled:       true,
+			maxCacheSize:  config.MaxCacheSize,
+		}
+		if bc.batchStrategy == nil {
+			bc.batchStrategy = defaultBucketStrategy
+		}
+		if bc.seqStrategy == nil {
+			bc.seqStrategy = defaultBucketStrategy
+		}
+		return bc
+	}
 }
 
 // gomlxBackend implements Backend using GoMLX for inference.
@@ -225,7 +281,9 @@ func (l *gomlxModelLoader) Load(path string, opts ...LoadOption) (Model, error) 
 
 // loadHuggingFace loads a HuggingFace model (SafeTensors format).
 func (l *gomlxModelLoader) loadHuggingFace(path string, config *LoadConfig, engine backends.Backend) (Model, error) {
-	hfModel, err := newHFModel(path, engine, config.Pooling, config.Normalize)
+	buckets := resolveBucketConfig(l.backend.backendType, config)
+
+	hfModel, err := newHFModel(path, engine, config.Pooling, config.Normalize, buckets.maxCacheSize)
 	if err != nil {
 		return nil, err
 	}
@@ -235,6 +293,7 @@ func (l *gomlxModelLoader) loadHuggingFace(path string, config *LoadConfig, engi
 		path:        path,
 		config:      config,
 		backendType: l.backend.backendType,
+		buckets:     buckets,
 	}, nil
 }
 
@@ -251,7 +310,9 @@ func (l *gomlxModelLoader) loadONNX(path string, config *LoadConfig, engine back
 		onnxPath = matches[0]
 	}
 
-	onnxModel, err := newONNXModel(onnxPath, engine, config.Pooling, config.Normalize)
+	buckets := resolveBucketConfig(l.backend.backendType, config)
+
+	onnxModel, err := newONNXModel(onnxPath, engine, config.Pooling, config.Normalize, buckets.maxCacheSize)
 	if err != nil {
 		return nil, err
 	}
@@ -261,6 +322,7 @@ func (l *gomlxModelLoader) loadONNX(path string, config *LoadConfig, engine back
 		path:        path,
 		config:      config,
 		backendType: l.backend.backendType,
+		buckets:     buckets,
 	}, nil
 }
 
@@ -306,9 +368,40 @@ type gomlxModelWrapper struct {
 	path        string
 	config      *LoadConfig
 	backendType BackendType
+	buckets     bucketConfig
 }
 
 func (m *gomlxModelWrapper) Forward(ctx context.Context, inputs *ModelInputs) (*ModelOutput, error) {
+	if !m.buckets.enabled {
+		return m.forwardDirect(ctx, inputs)
+	}
+
+	// Record original dimensions for trimming after inference.
+	origBatch := len(inputs.InputIDs)
+	if origBatch == 0 {
+		return m.forwardDirect(ctx, inputs)
+	}
+	origSeq := len(inputs.InputIDs[0])
+
+	// Round up to the nearest bucket.
+	bucketedBatch := m.buckets.batchStrategy.Bucket(origBatch)
+	bucketedSeq := m.buckets.seqStrategy.Bucket(origSeq)
+
+	// Pad inputs to bucketed dimensions.
+	padded := padModelInputs(inputs, bucketedBatch, bucketedSeq)
+
+	// Run inference on the padded inputs.
+	output, err := m.forwardDirect(ctx, padded)
+	if err != nil {
+		return nil, err
+	}
+
+	// Trim the output back to original dimensions.
+	return trimModelOutput(output, origBatch, origSeq), nil
+}
+
+// forwardDirect runs inference without bucketing.
+func (m *gomlxModelWrapper) forwardDirect(ctx context.Context, inputs *ModelInputs) (*ModelOutput, error) {
 	if m.hfModel != nil {
 		return m.hfModel.forward(ctx, inputs.InputIDs, inputs.AttentionMask)
 	}
@@ -316,6 +409,78 @@ func (m *gomlxModelWrapper) Forward(ctx context.Context, inputs *ModelInputs) (*
 		return m.onnxModel.forward(ctx, inputs.InputIDs, inputs.AttentionMask)
 	}
 	return nil, fmt.Errorf("no model loaded")
+}
+
+// padModelInputs pads InputIDs, AttentionMask, and TokenTypeIDs to the target dimensions.
+// Padding values are zero, which means attention mask zeros will exclude padded positions from pooling.
+// Returns the original inputs unchanged if already at the target size.
+func padModelInputs(inputs *ModelInputs, targetBatch, targetSeq int) *ModelInputs {
+	origBatch := len(inputs.InputIDs)
+	origSeq := 0
+	if origBatch > 0 {
+		origSeq = len(inputs.InputIDs[0])
+	}
+
+	// No padding needed.
+	if origBatch == targetBatch && origSeq == targetSeq {
+		return inputs
+	}
+
+	padded := *inputs // shallow copy
+
+	padded.InputIDs = padInt32Slice(inputs.InputIDs, targetBatch, targetSeq)
+	padded.AttentionMask = padInt32Slice(inputs.AttentionMask, targetBatch, targetSeq)
+	if len(inputs.TokenTypeIDs) > 0 {
+		padded.TokenTypeIDs = padInt32Slice(inputs.TokenTypeIDs, targetBatch, targetSeq)
+	}
+
+	return &padded
+}
+
+// padInt32Slice pads a [batch, seq] int32 slice to the target dimensions with zeros.
+func padInt32Slice(src [][]int32, targetBatch, targetSeq int) [][]int32 {
+	result := make([][]int32, targetBatch)
+	for i := range targetBatch {
+		row := make([]int32, targetSeq)
+		if i < len(src) {
+			copy(row, src[i])
+		}
+		result[i] = row
+	}
+	return result
+}
+
+// trimModelOutput trims inference output back to the original unpadded dimensions.
+func trimModelOutput(output *ModelOutput, origBatch, origSeq int) *ModelOutput {
+	if output == nil {
+		return nil
+	}
+
+	trimmed := *output // shallow copy
+
+	// LastHiddenState [batch, seq, hidden]: trim both batch and seq.
+	if len(output.LastHiddenState) > origBatch {
+		trimmed.LastHiddenState = output.LastHiddenState[:origBatch]
+	}
+	for i := range trimmed.LastHiddenState {
+		if len(trimmed.LastHiddenState[i]) > origSeq {
+			trimmed.LastHiddenState[i] = trimmed.LastHiddenState[i][:origSeq]
+		}
+	}
+
+	// Embeddings [batch, hidden]: trim batch only.
+	if len(output.Embeddings) > origBatch {
+		trimmed.Embeddings = output.Embeddings[:origBatch]
+	}
+
+	// Logits [batch, classes]: trim batch only.
+	if len(output.Logits) > origBatch {
+		trimmed.Logits = output.Logits[:origBatch]
+	}
+
+	// EncoderOutput and PastKeyValues are passed through unchanged.
+
+	return &trimmed
 }
 
 func (m *gomlxModelWrapper) Close() error {
@@ -343,19 +508,21 @@ func (m *gomlxModelWrapper) Backend() BackendType {
 // hfModel implements inference for HuggingFace models (SafeTensors format)
 // using huggingface-gomlx.
 type hfModel struct {
-	path      string
-	pooling   string
-	normalize bool
-	hfModel   *hfmodels.Model
-	ctx       *mlctx.Context
-	engine    backends.Backend
-	exec      *mlctx.Exec // Compiled inference graph
+	path         string
+	pooling      string
+	normalize    bool
+	maxCacheSize int
+	hfModel      *hfmodels.Model
+	ctx          *mlctx.Context
+	engine       backends.Backend
+	exec         *mlctx.Exec // Compiled inference graph
 
 	mu sync.Mutex
 }
 
 // newHFModel loads a HuggingFace model from a local directory.
-func newHFModel(path string, engine backends.Backend, pooling string, normalize bool) (*hfModel, error) {
+// maxCacheSize controls the compiled graph cache: 0 keeps GoMLX default, -1 is unlimited, >0 is explicit.
+func newHFModel(path string, engine backends.Backend, pooling string, normalize bool, maxCacheSize int) (*hfModel, error) {
 	// Load the model using huggingface-gomlx
 	hfm, err := hfmodels.NewFromLocal(path)
 	if err != nil {
@@ -369,12 +536,13 @@ func newHFModel(path string, engine backends.Backend, pooling string, normalize 
 	}
 
 	model := &hfModel{
-		path:      path,
-		pooling:   pooling,
-		normalize: normalize,
-		hfModel:   hfm,
-		ctx:       ctx,
-		engine:    engine,
+		path:         path,
+		pooling:      pooling,
+		normalize:    normalize,
+		maxCacheSize: maxCacheSize,
+		hfModel:      hfm,
+		ctx:          ctx,
+		engine:       engine,
 	}
 
 	// Pre-compile the inference graph if possible
@@ -409,6 +577,9 @@ func (m *hfModel) compile() error {
 	})
 	if err != nil {
 		return fmt.Errorf("creating exec: %w", err)
+	}
+	if m.maxCacheSize != 0 {
+		exec.SetMaxCache(m.maxCacheSize)
 	}
 	m.exec = exec
 
@@ -491,18 +662,22 @@ func (m *hfModel) close() error {
 // onnxModel implements inference for ONNX models using onnx-gomlx.
 // This converts ONNX graphs to GoMLX for execution.
 type onnxModel struct {
-	path      string
-	pooling   string
-	normalize bool
-	onnxModel *onnx.Model
-	ctx       *mlctx.Context
-	engine    backends.Backend
+	path            string
+	pooling         string
+	normalize       bool
+	maxCacheSize    int
+	onnxModel       *onnx.Model
+	ctx             *mlctx.Context
+	engine          backends.Backend
+	exec            *mlctx.Exec // Cached compiled inference graph
+	hasTokenTypeIds bool
 
 	mu sync.Mutex
 }
 
 // newONNXModel loads an ONNX model from a file path.
-func newONNXModel(onnxPath string, engine backends.Backend, pooling string, normalize bool) (*onnxModel, error) {
+// maxCacheSize controls the compiled graph cache: 0 keeps GoMLX default, -1 is unlimited, >0 is explicit.
+func newONNXModel(onnxPath string, engine backends.Backend, pooling string, normalize bool, maxCacheSize int) (*onnxModel, error) {
 	// Load the ONNX model
 	om, err := onnx.ReadFile(onnxPath)
 	if err != nil {
@@ -515,14 +690,58 @@ func newONNXModel(onnxPath string, engine backends.Backend, pooling string, norm
 		return nil, fmt.Errorf("loading ONNX variables: %w", err)
 	}
 
-	return &onnxModel{
-		path:      onnxPath,
-		pooling:   pooling,
-		normalize: normalize,
-		onnxModel: om,
-		ctx:       ctx,
-		engine:    engine,
-	}, nil
+	// Check if model requires token_type_ids
+	inputNames, _ := om.Inputs()
+	hasTokenTypeIds := false
+	for _, name := range inputNames {
+		if name == "token_type_ids" {
+			hasTokenTypeIds = true
+			break
+		}
+	}
+
+	model := &onnxModel{
+		path:            onnxPath,
+		pooling:         pooling,
+		normalize:       normalize,
+		maxCacheSize:    maxCacheSize,
+		onnxModel:       om,
+		ctx:             ctx,
+		engine:          engine,
+		hasTokenTypeIds: hasTokenTypeIds,
+	}
+
+	// Pre-compile the inference graph for efficiency.
+	// This compiles once and caches the executable, avoiding recompilation on every forward() call.
+	if err := model.compile(); err != nil {
+		return nil, fmt.Errorf("compiling ONNX inference graph: %w", err)
+	}
+
+	return model, nil
+}
+
+// compile pre-compiles the ONNX inference graph.
+func (m *onnxModel) compile() error {
+	graphFn := func(mlCtx *mlctx.Context, inputs []*graph.Node) []*graph.Node {
+		inputMap := map[string]*graph.Node{
+			"input_ids":      inputs[0],
+			"attention_mask": inputs[1],
+		}
+		if len(inputs) > 2 {
+			inputMap["token_type_ids"] = inputs[2]
+		}
+		return m.onnxModel.CallGraph(mlCtx.Reuse(), inputs[0].Graph(), inputMap)
+	}
+
+	exec, err := mlctx.NewExecAny(m.engine, m.ctx, graphFn)
+	if err != nil {
+		return fmt.Errorf("creating exec: %w", err)
+	}
+	if m.maxCacheSize != 0 {
+		exec.SetMaxCache(m.maxCacheSize)
+	}
+	m.exec = exec
+	return nil
 }
 
 // forward runs inference on the given inputs.
@@ -550,41 +769,37 @@ func (m *onnxModel) forward(ctx context.Context, inputIDs [][]int32, attentionMa
 	inputIDsTensor := tensors.FromFlatDataAndDimensions(flatInputIDs, batchSize, seqLen)
 	attentionMaskTensor := tensors.FromFlatDataAndDimensions(flatAttentionMask, batchSize, seqLen)
 
-	// Check if model requires token_type_ids (used by BERT-based models)
-	var tokenTypeIdsTensor *tensors.Tensor
-	inputNames, _ := m.onnxModel.Inputs()
-	needsTokenTypeIds := false
-	for _, name := range inputNames {
-		if name == "token_type_ids" {
-			needsTokenTypeIds = true
-			break
-		}
-	}
-	if needsTokenTypeIds {
-		// Create zeros tensor for token_type_ids (same shape as input_ids)
-		flatTokenTypeIds := make([]int64, batchSize*seqLen) // zeros by default
-		tokenTypeIdsTensor = tensors.FromFlatDataAndDimensions(flatTokenTypeIds, batchSize, seqLen)
-	}
-
-	// Build the ONNX graph function
-	graphFn := func(mlCtx *mlctx.Context, inputs []*graph.Node) []*graph.Node {
-		inputMap := map[string]*graph.Node{
-			"input_ids":      inputs[0],
-			"attention_mask": inputs[1],
-		}
-		if len(inputs) > 2 {
-			inputMap["token_type_ids"] = inputs[2]
-		}
-		return m.onnxModel.CallGraph(mlCtx.Reuse(), inputs[0].Graph(), inputMap)
-	}
-
-	// Execute with the appropriate inputs
+	// Execute using the cached compiled graph
 	var results []*tensors.Tensor
 	var err error
-	if tokenTypeIdsTensor != nil {
-		results, err = mlctx.ExecOnceN(m.engine, m.ctx, graphFn, inputIDsTensor, attentionMaskTensor, tokenTypeIdsTensor)
+	if m.exec != nil {
+		// Use cached executable (compile once, execute many)
+		if m.hasTokenTypeIds {
+			flatTokenTypeIds := make([]int64, batchSize*seqLen) // zeros by default
+			tokenTypeIdsTensor := tensors.FromFlatDataAndDimensions(flatTokenTypeIds, batchSize, seqLen)
+			results, err = m.exec.Exec(inputIDsTensor, attentionMaskTensor, tokenTypeIdsTensor)
+		} else {
+			results, err = m.exec.Exec(inputIDsTensor, attentionMaskTensor)
+		}
 	} else {
-		results, err = mlctx.ExecOnceN(m.engine, m.ctx, graphFn, inputIDsTensor, attentionMaskTensor)
+		// Fallback to ExecOnceN (recompiles each time)
+		graphFn := func(mlCtx *mlctx.Context, inputs []*graph.Node) []*graph.Node {
+			inputMap := map[string]*graph.Node{
+				"input_ids":      inputs[0],
+				"attention_mask": inputs[1],
+			}
+			if len(inputs) > 2 {
+				inputMap["token_type_ids"] = inputs[2]
+			}
+			return m.onnxModel.CallGraph(mlCtx.Reuse(), inputs[0].Graph(), inputMap)
+		}
+		if m.hasTokenTypeIds {
+			flatTokenTypeIds := make([]int64, batchSize*seqLen)
+			tokenTypeIdsTensor := tensors.FromFlatDataAndDimensions(flatTokenTypeIds, batchSize, seqLen)
+			results, err = mlctx.ExecOnceN(m.engine, m.ctx, graphFn, inputIDsTensor, attentionMaskTensor, tokenTypeIdsTensor)
+		} else {
+			results, err = mlctx.ExecOnceN(m.engine, m.ctx, graphFn, inputIDsTensor, attentionMaskTensor)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("exec failed: %w", err)
@@ -699,7 +914,7 @@ func (f *gomlxSessionFactory) CreateSession(modelPath string, opts ...SessionOpt
 		}
 	}
 
-	return &gomlxSession{
+	sess := &gomlxSession{
 		onnxModel:   om,
 		ctx:         ctx,
 		engine:      engine,
@@ -707,7 +922,14 @@ func (f *gomlxSessionFactory) CreateSession(modelPath string, opts ...SessionOpt
 		outputInfo:  outputInfo,
 		inputNames:  inputNames,
 		outputNames: outputNames,
-	}, nil
+	}
+
+	// Pre-compile the session graph.
+	if err := sess.compile(f.backend.backendType); err != nil {
+		return nil, fmt.Errorf("compiling session graph: %w", err)
+	}
+
+	return sess, nil
 }
 
 func (f *gomlxSessionFactory) Backend() BackendType {
@@ -719,11 +941,36 @@ type gomlxSession struct {
 	onnxModel   *onnx.Model
 	ctx         *mlctx.Context
 	engine      backends.Backend
+	exec        *mlctx.Exec // Cached compiled graph
 	inputInfo   []TensorInfo
 	outputInfo  []TensorInfo
 	inputNames  []string
 	outputNames []string
 	mu          sync.Mutex
+}
+
+// compile pre-compiles the session's ONNX graph for reuse across Run() calls.
+func (s *gomlxSession) compile(backendType BackendType) error {
+	graphFn := func(mlCtx *mlctx.Context, graphInputs []*graph.Node) []*graph.Node {
+		inputNodeMap := make(map[string]*graph.Node, len(s.inputNames))
+		for i, name := range s.inputNames {
+			inputNodeMap[name] = graphInputs[i]
+		}
+		return s.onnxModel.CallGraph(mlCtx.Reuse(), graphInputs[0].Graph(), inputNodeMap)
+	}
+
+	exec, err := mlctx.NewExecAny(s.engine, s.ctx, graphFn)
+	if err != nil {
+		return fmt.Errorf("creating exec: %w", err)
+	}
+
+	// Go backend: unlimited cache (no JIT cost). JIT backends: GoMLX default (32).
+	if backendType == BackendGo {
+		exec.SetMaxCache(-1)
+	}
+
+	s.exec = exec
+	return nil
 }
 
 func (s *gomlxSession) Run(inputs []NamedTensor) ([]NamedTensor, error) {
@@ -754,21 +1001,27 @@ func (s *gomlxSession) Run(inputs []NamedTensor) ([]NamedTensor, error) {
 		gomlxInputs[i] = tensor
 	}
 
-	// Build the ONNX graph function
-	graphFn := func(mlCtx *mlctx.Context, graphInputs []*graph.Node) []*graph.Node {
-		inputNodeMap := make(map[string]*graph.Node, len(s.inputNames))
-		for i, name := range s.inputNames {
-			inputNodeMap[name] = graphInputs[i]
-		}
-		return s.onnxModel.CallGraph(mlCtx.Reuse(), graphInputs[0].Graph(), inputNodeMap)
-	}
-
-	// Execute - convert []*tensors.Tensor to []any for variadic call
+	// Execute using the cached compiled graph or fall back to ExecOnceN.
 	args := make([]any, len(gomlxInputs))
 	for i, t := range gomlxInputs {
 		args[i] = t
 	}
-	results, err := mlctx.ExecOnceN(s.engine, s.ctx, graphFn, args...)
+
+	var results []*tensors.Tensor
+	var err error
+	if s.exec != nil {
+		results, err = s.exec.Exec(args...)
+	} else {
+		// Fallback: recompile each time (should not happen after compile()).
+		graphFn := func(mlCtx *mlctx.Context, graphInputs []*graph.Node) []*graph.Node {
+			inputNodeMap := make(map[string]*graph.Node, len(s.inputNames))
+			for i, name := range s.inputNames {
+				inputNodeMap[name] = graphInputs[i]
+			}
+			return s.onnxModel.CallGraph(mlCtx.Reuse(), graphInputs[0].Graph(), inputNodeMap)
+		}
+		results, err = mlctx.ExecOnceN(s.engine, s.ctx, graphFn, args...)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("executing ONNX graph: %w", err)
 	}
@@ -801,6 +1054,10 @@ func (s *gomlxSession) OutputInfo() []TensorInfo {
 func (s *gomlxSession) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.exec != nil {
+		s.exec.Finalize()
+		s.exec = nil
+	}
 	s.onnxModel = nil
 	s.ctx = nil
 	return nil

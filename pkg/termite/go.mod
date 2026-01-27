@@ -2,10 +2,6 @@ module github.com/antflydb/termite/pkg/termite
 
 go 1.26rc2
 
-replace github.com/gomlx/gomlx => github.com/timkaye11/gomlx v0.0.0-20251221044952-ee84bc4bbaf7
-
-replace github.com/gomlx/onnx-gomlx => github.com/timkaye11/onnx-gomlx v0.0.0-20251217194823-a871bb8cc687
-
 require (
 	github.com/ajroetker/go-highway v0.0.0-dev12
 	github.com/ajroetker/huggingface-gomlx v0.0.0-20260125071513-bbe694562131
