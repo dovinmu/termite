@@ -708,6 +708,10 @@ func (m *hfModel) forward(ctx context.Context, inputIDs [][]int32, attentionMask
 }
 
 func (m *hfModel) close() error {
+	if m.exec != nil {
+		m.exec.Finalize()
+		m.exec = nil
+	}
 	return nil
 }
 
@@ -1042,6 +1046,10 @@ func (m *onnxModel) parseOutput(results []*tensors.Tensor, batchSize int) (*Mode
 }
 
 func (m *onnxModel) close() error {
+	if m.exec != nil {
+		m.exec.Finalize()
+		m.exec = nil
+	}
 	return nil
 }
 
