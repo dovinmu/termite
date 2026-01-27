@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package termite
+package e2e
 
 import (
 	"context"
@@ -31,11 +31,9 @@ import (
 // TestCompareBackendEmbeddings compares embedding generation timing between
 // CoreML and Go backends.
 func TestCompareBackendEmbeddings(t *testing.T) {
-	// Find an embedder model
-	modelPath := findEmbedderModel(t)
-	if modelPath == "" {
-		t.Skip("No embedder model found")
-	}
+	// Ensure an embedder model is downloaded
+	// modelPath := ensureRegistryModel(t, "BAAI/bge-small-en-v1.5", ModelTypeEmbedder)
+	modelPath := ensureHuggingFaceModel(t, "Snowflake/snowflake-arctic-embed-l-v2.0", "Snowflake/snowflake-arctic-embed-l-v2.0", ModelTypeEmbedder)
 
 	t.Logf("Using model: %s", modelPath)
 
@@ -128,40 +126,12 @@ func TestCompareBackendEmbeddings(t *testing.T) {
 	}
 }
 
-// findEmbedderModel searches for an available embedder model.
-func findEmbedderModel(t *testing.T) string {
-	t.Helper()
-
-	// Check common locations
-	patterns := []string{
-		"/var/folders/*/T/termite-e2e-models-*/embedders/*/*/model.onnx",
-		os.ExpandEnv("$HOME/.termite/models/embedders/*/*/model.onnx"),
-	}
-
-	for _, pattern := range patterns {
-		matches, _ := filepath.Glob(pattern)
-		for _, match := range matches {
-			// Return the directory containing model.onnx
-			dir := filepath.Dir(match)
-			t.Logf("Found model at: %s", dir)
-			return dir
-		}
-	}
-
-	// Check EMBEDDING_MODEL_PATH env var
-	if path := os.Getenv("EMBEDDING_MODEL_PATH"); path != "" {
-		return path
-	}
-
-	return ""
-}
-
 // BenchmarkBackendComparison runs a proper benchmark comparing backends.
 func BenchmarkBackendComparison(b *testing.B) {
-	// Find an embedder model
+	// Look for a model already downloaded by TestCompareBackendEmbeddings
 	modelPath := ""
 	patterns := []string{
-		"/var/folders/*/T/termite-e2e-models-*/embedders/*/*/model.onnx",
+		filepath.Join(testModelsDir, "embedders", "*", "*", "model.onnx"),
 		os.ExpandEnv("$HOME/.termite/models/embedders/*/*/model.onnx"),
 	}
 	for _, pattern := range patterns {
@@ -175,7 +145,7 @@ func BenchmarkBackendComparison(b *testing.B) {
 		modelPath = path
 	}
 	if modelPath == "" {
-		b.Skip("No embedder model found")
+		b.Skip("No embedder model found — run TestCompareBackendEmbeddings first to download one")
 	}
 
 	texts := []string{

@@ -89,7 +89,3 @@ require (
 replace github.com/antflydb/termite/pkg/client => ../pkg/client
 
 replace github.com/antflydb/termite/pkg/termite => ../pkg/termite
-
-replace github.com/gomlx/gomlx => github.com/timkaye11/gomlx v0.0.0-20251221044952-ee84bc4bbaf7
-
-replace github.com/gomlx/onnx-gomlx => github.com/timkaye11/onnx-gomlx v0.0.0-20251217194823-a871bb8cc687

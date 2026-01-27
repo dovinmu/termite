@@ -230,6 +230,16 @@ type LoadConfig struct {
 	// MaxCacheSize limits the number of cached compiled graphs.
 	// 0 = use GoMLX default (32), -1 = unlimited.
 	MaxCacheSize int
+
+	// PreCompileMaxBatch is the maximum batch size for eager pre-compilation of
+	// bucket shapes at model load time. 0 = use BatchSize if set, otherwise skip.
+	// Only used by JIT backends (CoreML, XLA) with bucketing enabled.
+	PreCompileMaxBatch int
+
+	// PreCompileMaxSeq is the maximum sequence length for eager pre-compilation of
+	// bucket shapes at model load time. 0 = use MaxLength.
+	// Only used by JIT backends (CoreML, XLA) with bucketing enabled.
+	PreCompileMaxSeq int
 }
 
 // DefaultLoadConfig returns a LoadConfig with sensible defaults.
@@ -348,6 +358,17 @@ func WithSeqBucketing(strategy bucketing.Strategy) LoadOption {
 func WithMaxCacheSize(size int) LoadOption {
 	return func(c *LoadConfig) {
 		c.MaxCacheSize = size
+	}
+}
+
+// WithPreCompileBuckets configures eager pre-compilation of bucket shapes at
+// model load time. maxBatch and maxSeq define the range of dimensions to
+// enumerate. All unique (batchBucket, seqBucket) combinations within these
+// bounds are pre-compiled. Use 0 to skip a dimension.
+func WithPreCompileBuckets(maxBatch, maxSeq int) LoadOption {
+	return func(c *LoadConfig) {
+		c.PreCompileMaxBatch = maxBatch
+		c.PreCompileMaxSeq = maxSeq
 	}
 }
 
