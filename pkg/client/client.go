@@ -488,6 +488,41 @@ func (c *TermiteClient) RewriteText(ctx context.Context, model string, inputs []
 	return resp.JSON200, nil
 }
 
+// Transcribe transcribes audio to text using a speech-to-text model.
+// The audio should be base64-encoded audio data (WAV, MP3, FLAC, etc.).
+// Model is optional - if empty, uses the default transcriber model.
+// Language is optional - if empty, the model will auto-detect.
+func (c *TermiteClient) Transcribe(ctx context.Context, model string, audio []byte, language string) (*oapi.TranscribeResponse, error) {
+	req := oapi.TranscribeRequest{
+		Model:    model,
+		Audio:    audio,
+		Language: language,
+	}
+
+	resp, err := c.client.TranscribeAudioWithResponse(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("sending request: %w", err)
+	}
+
+	if resp.JSON400 != nil {
+		return nil, fmt.Errorf("bad request: %s", resp.JSON400.Error)
+	}
+	if resp.JSON404 != nil {
+		return nil, fmt.Errorf("model not found: %s", resp.JSON404.Error)
+	}
+	if resp.JSON500 != nil {
+		return nil, fmt.Errorf("server error: %s", resp.JSON500.Error)
+	}
+	if resp.JSON503 != nil {
+		return nil, fmt.Errorf("service unavailable: %s", resp.JSON503.Error)
+	}
+	if resp.JSON200 == nil {
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode(), string(resp.Body))
+	}
+
+	return resp.JSON200, nil
+}
+
 // GenerateConfig contains configuration for text generation.
 type GenerateConfig struct {
 	MaxTokens   int
