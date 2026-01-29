@@ -26,6 +26,7 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,14 +48,16 @@ import (
 //
 // Build with: CGO_ENABLED=1 go build -tags="onnx,ORT"
 type HugotCLIPEmbedder struct {
-	visualPipeline *pipelines.FeatureExtractionPipeline
-	textPipeline   *pipelines.FeatureExtractionPipeline
-	session        *khugot.Session
-	config         *HugotCLIPConfig
-	logger         *zap.Logger
-	caps           libafembed.EmbedderCapabilities
-	modelPath      string
-	sessionShared  bool
+	visualPipeline   *pipelines.FeatureExtractionPipeline
+	textPipeline     *pipelines.FeatureExtractionPipeline
+	session          *khugot.Session
+	config           *HugotCLIPConfig
+	logger           *zap.Logger
+	caps             libafembed.EmbedderCapabilities
+	modelPath        string
+	sessionShared    bool
+	visualProjection *projectionSession // Projects visual encoder output to shared space
+	textProjection   *projectionSession // Projects text encoder output to shared space
 }
 
 // HugotCLIPConfig holds the CLIP model configuration
@@ -206,18 +209,64 @@ func NewHugotCLIPEmbedderWithSession(modelPath string, quantized bool, sharedSes
 		return nil, fmt.Errorf("creating text pipeline: %w", err)
 	}
 
+	// Load projection layers if they exist
+	// These transform encoder outputs to the shared embedding space
+	var visualProjection, textProjection *projectionSession
+
+	visualProjPath := filepath.Join(modelPath, "visual_projection.onnx")
+	textProjPath := filepath.Join(modelPath, "text_projection.onnx")
+
+	if _, statErr := os.Stat(visualProjPath); statErr == nil {
+		visualProjection, err = newProjectionSession(visualProjPath)
+		if err != nil {
+			logger.Warn("Failed to load visual projection layer",
+				zap.String("path", visualProjPath),
+				zap.Error(err))
+		} else {
+			logger.Info("Loaded visual projection layer",
+				zap.String("path", visualProjPath),
+				zap.Int("inputDim", visualProjection.InputDim()),
+				zap.Int("outputDim", visualProjection.OutputDim()))
+		}
+	}
+
+	if _, statErr := os.Stat(textProjPath); statErr == nil {
+		textProjection, err = newProjectionSession(textProjPath)
+		if err != nil {
+			logger.Warn("Failed to load text projection layer",
+				zap.String("path", textProjPath),
+				zap.Error(err))
+		} else {
+			logger.Info("Loaded text projection layer",
+				zap.String("path", textProjPath),
+				zap.Int("inputDim", textProjection.InputDim()),
+				zap.Int("outputDim", textProjection.OutputDim()))
+		}
+	}
+
+	// Warn if only one projection is available (cross-modal won't work properly)
+	if (visualProjection == nil) != (textProjection == nil) {
+		logger.Warn("Partial projection loading - cross-modal similarity may not work correctly",
+			zap.Bool("hasVisualProjection", visualProjection != nil),
+			zap.Bool("hasTextProjection", textProjection != nil))
+	}
+
 	logger.Info("HugotCLIP embedder initialized",
 		zap.Int("projectionDim", config.ProjectionDim),
-		zap.Int("imageSize", imageSize))
+		zap.Int("imageSize", imageSize),
+		zap.Bool("hasVisualProjection", visualProjection != nil),
+		zap.Bool("hasTextProjection", textProjection != nil))
 
 	return &HugotCLIPEmbedder{
-		visualPipeline: visualPipeline,
-		textPipeline:   textPipeline,
-		session:        session,
-		config:         config,
-		logger:         logger,
-		modelPath:      modelPath,
-		sessionShared:  sessionShared,
+		visualPipeline:   visualPipeline,
+		textPipeline:     textPipeline,
+		session:          session,
+		config:           config,
+		logger:           logger,
+		modelPath:        modelPath,
+		sessionShared:    sessionShared,
+		visualProjection: visualProjection,
+		textProjection:   textProjection,
 		caps: libafembed.EmbedderCapabilities{
 			SupportedMIMETypes: []libafembed.MIMETypeSupport{
 				{MIMEType: "text/plain"},
@@ -301,8 +350,20 @@ func (c *HugotCLIPEmbedder) embedImage(imageData []byte) ([]float32, error) {
 		return nil, errors.New("no embedding returned from visual pipeline")
 	}
 
-	// Pipeline already normalizes if WithNormalization() was used
-	return output.Embeddings[0], nil
+	embedding := output.Embeddings[0]
+
+	// Apply visual projection if available
+	// This transforms the encoder output (e.g., 768-dim) to the shared embedding space (e.g., 512-dim)
+	if c.visualProjection != nil {
+		projected, err := c.visualProjection.Project(embedding)
+		if err != nil {
+			return nil, fmt.Errorf("applying visual projection: %w", err)
+		}
+		embedding = projected
+	}
+
+	// Normalize after projection
+	return normalizeEmbedding(embedding), nil
 }
 
 // embedText tokenizes text and returns its embedding using the text pipeline
@@ -317,19 +378,70 @@ func (c *HugotCLIPEmbedder) embedText(text string) ([]float32, error) {
 		return nil, errors.New("no embedding returned from text pipeline")
 	}
 
-	// Pipeline already normalizes if WithNormalization() was used
-	return output.Embeddings[0], nil
+	embedding := output.Embeddings[0]
+
+	// Apply text projection if available
+	// This transforms the encoder output to the shared embedding space
+	if c.textProjection != nil {
+		projected, err := c.textProjection.Project(embedding)
+		if err != nil {
+			return nil, fmt.Errorf("applying text projection: %w", err)
+		}
+		embedding = projected
+	}
+
+	// Normalize after projection
+	return normalizeEmbedding(embedding), nil
 }
 
 // Close releases resources
 func (c *HugotCLIPEmbedder) Close() error {
+	var errs []error
+
+	// Close projection sessions
+	if c.visualProjection != nil {
+		if err := c.visualProjection.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("closing visual projection: %w", err))
+		}
+	}
+	if c.textProjection != nil {
+		if err := c.textProjection.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("closing text projection: %w", err))
+		}
+	}
+
+	// Close hugot session if owned
 	if c.session != nil && !c.sessionShared {
 		c.logger.Info("Destroying Hugot session (owned by this CLIP embedder)")
-		return c.session.Destroy()
+		if err := c.session.Destroy(); err != nil {
+			errs = append(errs, fmt.Errorf("destroying session: %w", err))
+		}
 	} else if c.sessionShared {
 		c.logger.Debug("Skipping session destruction (shared session)")
 	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors closing CLIP embedder: %v", errs)
+	}
 	return nil
+}
+
+// normalizeEmbedding applies L2 normalization to an embedding vector.
+// This ensures the embedding has unit length, which is required for cosine similarity.
+func normalizeEmbedding(v []float32) []float32 {
+	var sumSquares float64
+	for _, x := range v {
+		sumSquares += float64(x) * float64(x)
+	}
+	norm := math.Sqrt(sumSquares)
+	if norm == 0 {
+		return v
+	}
+	result := make([]float32, len(v))
+	for i, x := range v {
+		result[i] = float32(float64(x) / norm)
+	}
+	return result
 }
 
 // loadHugotCLIPConfig loads CLIP configuration from model directory
