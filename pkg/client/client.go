@@ -180,6 +180,55 @@ func (c *TermiteClient) Embed(ctx context.Context, model string, input []string)
 	return embeddings, nil
 }
 
+// EmbedMultimodal generates embeddings for multimodal content parts (text, images, audio).
+// Each ContentPart can be a TextContentPart or ImageURLContentPart (with URL or data URI).
+// Returns embeddings in binary format (most efficient).
+func (c *TermiteClient) EmbedMultimodal(ctx context.Context, model string, input []oapi.ContentPart) ([][]float32, error) {
+	var inputUnion oapi.EmbedRequest_Input
+	if err := inputUnion.FromEmbedRequestInput2(input); err != nil {
+		return nil, fmt.Errorf("building input: %w", err)
+	}
+
+	req := oapi.EmbedRequest{
+		Model: model,
+		Input: inputUnion,
+	}
+
+	resp, err := c.client.GenerateEmbeddingsWithResponse(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("sending request: %w", err)
+	}
+
+	if resp.JSON400 != nil {
+		return nil, fmt.Errorf("bad request: %s", resp.JSON400.Error)
+	}
+	if resp.JSON404 != nil {
+		return nil, fmt.Errorf("model not found: %s", resp.JSON404.Error)
+	}
+	if resp.JSON500 != nil {
+		return nil, fmt.Errorf("server error: %s", resp.JSON500.Error)
+	}
+
+	contentType := resp.HTTPResponse.Header.Get("Content-Type")
+	if strings.Contains(contentType, "application/json") {
+		if resp.JSON200 != nil {
+			return resp.JSON200.Embeddings, nil
+		}
+		return nil, fmt.Errorf("unexpected JSON response: %s", string(resp.Body))
+	}
+
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode(), string(resp.Body))
+	}
+
+	embeddings, err := deserializeFloatArrays(bytes.NewReader(resp.Body))
+	if err != nil {
+		return nil, fmt.Errorf("deserializing embeddings: %w", err)
+	}
+
+	return embeddings, nil
+}
+
 // EmbedJSON generates embeddings and returns JSON response (includes model name).
 func (c *TermiteClient) EmbedJSON(ctx context.Context, model string, input []string) (*oapi.EmbedResponse, error) {
 	var inputUnion oapi.EmbedRequest_Input
