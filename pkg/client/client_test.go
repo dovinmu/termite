@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/antflydb/termite/pkg/client/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -480,4 +481,128 @@ func TestClient_URLNormalization(t *testing.T) {
 	ctx := context.Background()
 	_, err = termiteClient.ListModels(ctx)
 	require.NoError(t, err)
+}
+
+func TestNewTextPart(t *testing.T) {
+	part, err := NewTextPart("hello world")
+	require.NoError(t, err)
+
+	// Verify it can be converted back to a TextContentPart
+	textPart, err := part.AsTextContentPart()
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", textPart.Text)
+}
+
+func TestNewImagePart(t *testing.T) {
+	imageURI := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+	part, err := NewImagePart(imageURI)
+	require.NoError(t, err)
+
+	// Verify it can be converted back to an ImageURLContentPart
+	imagePart, err := part.AsImageURLContentPart()
+	require.NoError(t, err)
+	assert.Equal(t, imageURI, imagePart.ImageUrl.Url)
+}
+
+func TestClient_EmbedMultimodal_Text(t *testing.T) {
+	expectedEmbeddings := [][]float32{
+		{0.1, 0.2, 0.3, 0.4},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/embed", r.URL.Path)
+		assert.Equal(t, "POST", r.Method)
+
+		// Parse request body
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var req map[string]any
+		err = json.Unmarshal(body, &req)
+		require.NoError(t, err)
+		assert.Equal(t, "clip-model", req["model"])
+
+		// Verify input is array of content parts
+		input := req["input"].([]any)
+		assert.Len(t, input, 1)
+
+		// Return binary response
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(serializeFloatArrays(expectedEmbeddings))
+	}))
+	defer server.Close()
+
+	termiteClient, err := NewTermiteClient(server.URL, nil)
+	require.NoError(t, err)
+
+	// Create text content part
+	textPart, err := NewTextPart("a photo of a cat")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	embeddings, err := termiteClient.EmbedMultimodal(ctx, "clip-model", []oapi.ContentPart{textPart})
+	require.NoError(t, err)
+
+	require.Len(t, embeddings, 1)
+	assert.InDeltaSlice(t, expectedEmbeddings[0], embeddings[0], 0.0001)
+}
+
+func TestClient_EmbedMultimodal_Image(t *testing.T) {
+	expectedEmbeddings := [][]float32{
+		{0.5, 0.6, 0.7, 0.8},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Return binary response
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(serializeFloatArrays(expectedEmbeddings))
+	}))
+	defer server.Close()
+
+	termiteClient, err := NewTermiteClient(server.URL, nil)
+	require.NoError(t, err)
+
+	// Create image content part
+	imagePart, err := NewImagePart("data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	embeddings, err := termiteClient.EmbedMultimodal(ctx, "clip-model", []oapi.ContentPart{imagePart})
+	require.NoError(t, err)
+
+	require.Len(t, embeddings, 1)
+	assert.InDeltaSlice(t, expectedEmbeddings[0], embeddings[0], 0.0001)
+}
+
+func TestClient_EmbedMultimodal_Mixed(t *testing.T) {
+	// Test mixing text and image in one batch
+	expectedEmbeddings := [][]float32{
+		{0.1, 0.2, 0.3, 0.4},
+		{0.5, 0.6, 0.7, 0.8},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(serializeFloatArrays(expectedEmbeddings))
+	}))
+	defer server.Close()
+
+	termiteClient, err := NewTermiteClient(server.URL, nil)
+	require.NoError(t, err)
+
+	textPart, err := NewTextPart("a cat")
+	require.NoError(t, err)
+	imagePart, err := NewImagePart("data:image/png;base64,abc123")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	embeddings, err := termiteClient.EmbedMultimodal(ctx, "clip-model", []oapi.ContentPart{textPart, imagePart})
+	require.NoError(t, err)
+
+	require.Len(t, embeddings, 2)
+	assert.InDeltaSlice(t, expectedEmbeddings[0], embeddings[0], 0.0001)
+	assert.InDeltaSlice(t, expectedEmbeddings[1], embeddings[1], 0.0001)
 }
