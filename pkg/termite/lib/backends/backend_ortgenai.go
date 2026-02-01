@@ -117,7 +117,23 @@ func (s *onnxGenerativeSession) Generate(ctx context.Context, messages []Generat
 			return nil, fmt.Errorf("loading images: %w", loadErr)
 		}
 		defer images.Destroy()
-		outputChan, errChan, err = s.session.GenerateWithImages(ctx, [][]ortgenai.Message{ortMessages}, images, genOpts)
+
+		// Create multimodal processor and convert images to named tensors
+		processor, procErr := ortgenai.CreateMultiModalProcessor(s.session.GetModel())
+		if procErr != nil {
+			return nil, fmt.Errorf("creating multimodal processor: %w", procErr)
+		}
+		defer processor.Destroy()
+
+		// Build prompt from messages for the processor
+		prompt := buildPromptFromMessages(ortMessages)
+		namedTensors, tensorErr := processor.ProcessImages(prompt, images)
+		if tensorErr != nil {
+			return nil, fmt.Errorf("processing images: %w", tensorErr)
+		}
+		defer namedTensors.Destroy()
+
+		outputChan, errChan, err = s.session.GenerateWithTensors(ctx, namedTensors, genOpts)
 	} else {
 		outputChan, errChan, err = s.session.Generate(ctx, [][]ortgenai.Message{ortMessages}, genOpts)
 	}
@@ -592,4 +608,17 @@ func extractImageURLsFromMessages(messages []GenerativeMessage) []string {
 		urls = append(urls, m.ImageURLs...)
 	}
 	return urls
+}
+
+// buildPromptFromMessages converts ortgenai messages to a single prompt string
+// for the multimodal processor.
+func buildPromptFromMessages(messages []ortgenai.Message) string {
+	var prompt strings.Builder
+	for _, m := range messages {
+		if prompt.Len() > 0 {
+			prompt.WriteString("\n")
+		}
+		prompt.WriteString(m.Content)
+	}
+	return prompt.String()
 }

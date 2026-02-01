@@ -750,8 +750,17 @@ func loadTextEmbeddingPipeline(
 		return nil, fmt.Errorf("loading tokenizer: %w", err)
 	}
 
-	// Load model
-	model, err := loader.Load(modelPath, backends.WithONNXFile(filepath.Base(config.TextEncoderFile)))
+	// Pooling strategy is a fallback - models with pooler_output (BERT, CLIP, etc.)
+	// will use that directly, ignoring this setting.
+	poolingStrategy := string(loaderCfg.pooling)
+	if poolingStrategy == "" {
+		poolingStrategy = "mean"
+	}
+
+	model, err := loader.Load(modelPath,
+		backends.WithONNXFile(filepath.Base(config.TextEncoderFile)),
+		backends.WithPooling(poolingStrategy),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("loading text model: %w", err)
 	}
@@ -771,15 +780,12 @@ func loadTextEmbeddingPipeline(
 		}
 	}
 
-	// Build pipeline config
+	// Build pipeline config using the same pooling strategy as the model
 	pipelineConfig := &EmbeddingPipelineConfig{
 		MaxLength:        FirstNonZero(loaderCfg.maxLength, 512),
 		Normalize:        loaderCfg.normalize,
-		Pooling:          loaderCfg.pooling,
+		Pooling:          backends.PoolingStrategy(poolingStrategy),
 		AddSpecialTokens: true,
-	}
-	if pipelineConfig.Pooling == "" {
-		pipelineConfig.Pooling = backends.PoolingMean
 	}
 
 	pipeline := NewEmbeddingPipeline(model, tokenizer, pipelineConfig)
