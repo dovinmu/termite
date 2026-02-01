@@ -101,9 +101,10 @@ func (c *HuggingFaceClient) PullFromHuggingFace(
 
 	// Filter and select files to download based on model type
 	var toDownload []string
-	if modelType == ModelTypeGenerator || modelType == ModelTypeReader {
-		// For generators and readers (Vision2Seq encoder-decoder models),
-		// auto-detect smallest variant if not specified
+	if modelType == ModelTypeGenerator || modelType == ModelTypeReader || modelType == ModelTypeTranscriber {
+		// For generators, readers (Vision2Seq), and transcribers (Speech2Seq) -
+		// all encoder-decoder models that need multiple ONNX files.
+		// Auto-detect smallest variant if not specified.
 		if variant == "" {
 			variant = findSmallestGeneratorVariant(files)
 			if variant != "" {
@@ -180,6 +181,9 @@ func (c *HuggingFaceClient) generateAndSaveManifest(
 	}
 
 	// Create manifest
+	// Note: Backends is left empty (nil) meaning all backends are supported.
+	// Models that require specific backends (e.g., ONNX-only due to unsupported ops)
+	// should specify this in the registry manifest or hardcoded list.
 	manifest := &ModelManifest{
 		SchemaVersion: CurrentSchemaVersion,
 		Name:          ref.Name,
@@ -187,7 +191,6 @@ func (c *HuggingFaceClient) generateAndSaveManifest(
 		Owner:         ref.Owner,
 		Type:          modelType,
 		Files:         files,
-		Backends:      []string{"onnx"},
 		Provenance: &ModelProvenance{
 			DownloadedFrom: "huggingface",
 			DownloadedAt:   time.Now(),

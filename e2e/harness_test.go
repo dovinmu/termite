@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build onnx && ORT
-
 package e2e
 
 import (
@@ -66,14 +64,15 @@ func TestMain(m *testing.M) {
 type ModelType string
 
 const (
-	ModelTypeEmbedder   ModelType = "embedders"
-	ModelTypeReranker   ModelType = "rerankers"
-	ModelTypeChunker    ModelType = "chunkers"
-	ModelTypeRewriter   ModelType = "rewriters"
-	ModelTypeRecognizer ModelType = "recognizers"
-	ModelTypeGenerator  ModelType = "generators"
-	ModelTypeClassifier ModelType = "classifiers"
-	ModelTypeReader     ModelType = "readers"
+	ModelTypeEmbedder    ModelType = "embedders"
+	ModelTypeReranker    ModelType = "rerankers"
+	ModelTypeChunker     ModelType = "chunkers"
+	ModelTypeRewriter    ModelType = "rewriters"
+	ModelTypeRecognizer  ModelType = "recognizers"
+	ModelTypeGenerator   ModelType = "generators"
+	ModelTypeClassifier  ModelType = "classifiers"
+	ModelTypeReader      ModelType = "readers"
+	ModelTypeTranscriber ModelType = "transcribers"
 )
 
 // ensureRegistryModel downloads a model from the Antfly model registry if not present.
@@ -182,6 +181,8 @@ func ensureHuggingFaceModel(t *testing.T, modelName, repo string, modelType Mode
 		regModelType = modelregistry.ModelTypeClassifier
 	case ModelTypeReader:
 		regModelType = modelregistry.ModelTypeReader
+	case ModelTypeTranscriber:
+		regModelType = modelregistry.ModelTypeTranscriber
 	default:
 		regModelType = modelregistry.ModelTypeEmbedder
 	}
@@ -245,4 +246,18 @@ func getGeneratorModelsDir() string {
 // getClassifierModelsDir returns the classifiers subdirectory
 func getClassifierModelsDir() string {
 	return filepath.Join(testModelsDir, "classifiers")
+}
+
+// getTranscriberModelsDir returns the transcribers subdirectory
+func getTranscriberModelsDir() string {
+	return filepath.Join(testModelsDir, "transcribers")
+}
+
+// fileExists checks if a file exists and is not a directory
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
 }
