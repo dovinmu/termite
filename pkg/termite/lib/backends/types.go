@@ -196,6 +196,9 @@ const (
 	PoolingCLS  PoolingStrategy = "cls"
 	PoolingMax  PoolingStrategy = "max"
 	PoolingNone PoolingStrategy = "none"
+	// PoolingEOS uses the last non-padding token (EOS position).
+	// Required for CLIP text encoder which stores the text embedding at [EOS].
+	PoolingEOS PoolingStrategy = "eos"
 )
 
 // ModelOutput contains the outputs from a forward pass.
