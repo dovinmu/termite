@@ -205,15 +205,23 @@ func testImageEmbedding(t *testing.T, ctx context.Context, c *client.TermiteClie
 }
 
 // testCrossModalSimilarity verifies text and image embeddings have the same dimension
+// and produce meaningful cross-modal similarity scores.
 func testCrossModalSimilarity(t *testing.T, ctx context.Context, c *client.TermiteClient, serverURL string) {
 	t.Helper()
 
-	// Get text embedding
+	// Get text embedding for matching description
 	textEmbeddings, err := c.Embed(ctx, clipModelName, []string{"a red square"})
 	if err != nil {
 		t.Fatalf("Text embedding failed: %v", err)
 	}
 	textEmb := textEmbeddings[0]
+
+	// Get text embedding for non-matching description
+	nonMatchEmbeddings, err := c.Embed(ctx, clipModelName, []string{"a photograph of a golden retriever dog"})
+	if err != nil {
+		t.Fatalf("Non-matching text embedding failed: %v", err)
+	}
+	nonMatchEmb := nonMatchEmbeddings[0]
 
 	// Get image embedding for a red square
 	imageData := createTestImage(t, 100, 100, color.RGBA{255, 0, 0, 255})
@@ -226,9 +234,31 @@ func testCrossModalSimilarity(t *testing.T, ctx context.Context, c *client.Termi
 		t.Logf("Cross-modal embeddings have matching dimension: %d", len(textEmb))
 	}
 
-	// Compute cosine similarity (optional, just for logging)
-	similarity := cosineSimilarity(textEmb, imageEmb)
-	t.Logf("Cosine similarity between 'a red square' and red square image: %.4f", similarity)
+	// Compute cosine similarity for matching text-image pair
+	matchSimilarity := cosineSimilarity(textEmb, imageEmb)
+	t.Logf("Cosine similarity between 'a red square' and red square image: %.4f", matchSimilarity)
+
+	// Compute cosine similarity for non-matching text-image pair
+	nonMatchSimilarity := cosineSimilarity(nonMatchEmb, imageEmb)
+	t.Logf("Cosine similarity between 'a dog' and red square image: %.4f", nonMatchSimilarity)
+
+	// CLIP cross-modal similarity for matching content should be meaningfully positive.
+	// For synthetic solid-color images, we expect lower similarity than real photos (which get 0.2-0.4).
+	// The key test is that matching content has HIGHER similarity than non-matching content.
+	// A value > 0.03 indicates the embeddings are in a shared space (not near-zero bug).
+	if matchSimilarity < 0.03 {
+		t.Errorf("Cross-modal similarity too low: %.4f (expected > 0.03 for matching content). "+
+			"This suggests the text encoder may be using wrong pooling strategy (should use EOS, not mean).", matchSimilarity)
+	}
+
+	// The matching description should have higher similarity than the non-matching one
+	if matchSimilarity <= nonMatchSimilarity {
+		t.Errorf("Matching text should have higher similarity than non-matching text: "+
+			"match=%.4f, non-match=%.4f", matchSimilarity, nonMatchSimilarity)
+	} else {
+		t.Logf("Matching text has higher similarity than non-matching: match=%.4f > non-match=%.4f",
+			matchSimilarity, nonMatchSimilarity)
+	}
 }
 
 // testDifferentImagesProduceDifferentEmbeddings verifies that different images produce different embeddings
