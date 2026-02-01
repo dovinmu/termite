@@ -16,7 +16,6 @@
 // with multi-backend support:
 //
 //   - go-huggingface: Hub download, tokenizers, safetensors parsing
-//   - huggingface-gomlx: Model architectures, GoMLX inference
 //   - onnx-gomlx: ONNX model execution via GoMLX
 //   - onnxruntime_go: Direct ONNX Runtime inference
 //

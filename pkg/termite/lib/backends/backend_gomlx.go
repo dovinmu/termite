@@ -21,8 +21,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	hfmodels "github.com/ajroetker/huggingface-gomlx"
-	"github.com/ajroetker/huggingface-gomlx/architectures/bert"
 	"github.com/gomlx/gomlx/backends"
 	"github.com/gomlx/gomlx/pkg/core/dtypes"
 	"github.com/gomlx/gomlx/pkg/core/graph"
@@ -131,9 +129,7 @@ func enumerateBuckets(strategy bucketing.Strategy, max int) []int {
 
 // gomlxBackend implements Backend using GoMLX for inference.
 //
-// This backend supports two model formats:
-//   - HuggingFace: SafeTensors + config.json (via huggingface-gomlx)
-//   - ONNX: .onnx model files (via onnx-gomlx)
+// This backend supports ONNX model files (via onnx-gomlx).
 //
 // Two backends are registered:
 //   - BackendGo: Pure Go engine (simplego), always available, slower
@@ -303,31 +299,11 @@ func (l *gomlxModelLoader) Load(path string, opts ...LoadOption) (Model, error) 
 	}
 
 	switch format {
-	case ModelFormatHuggingFace:
-		return l.loadHuggingFace(path, config, engine)
 	case ModelFormatONNX:
 		return l.loadONNX(path, config, engine)
 	default:
 		return nil, fmt.Errorf("unknown model format at %s", path)
 	}
-}
-
-// loadHuggingFace loads a HuggingFace model (SafeTensors format).
-func (l *gomlxModelLoader) loadHuggingFace(path string, config *LoadConfig, engine backends.Backend) (Model, error) {
-	buckets := resolveBucketConfig(l.backend.backendType, config)
-
-	hfModel, err := newHFModel(path, engine, config.Pooling, config.Normalize, buckets)
-	if err != nil {
-		return nil, err
-	}
-
-	return &gomlxModelWrapper{
-		hfModel:     hfModel,
-		path:        path,
-		config:      config,
-		backendType: l.backend.backendType,
-		buckets:     buckets,
-	}, nil
 }
 
 // loadONNX loads an ONNX model via onnx-gomlx.
@@ -370,21 +346,6 @@ func (l *gomlxModelLoader) Backend() BackendType {
 
 // detectGoMLXModelFormat auto-detects the model format from files present.
 func detectGoMLXModelFormat(path string) ModelFormat {
-	// Check for HuggingFace format (config.json + safetensors)
-	configPath := filepath.Join(path, "config.json")
-	if _, err := os.Stat(configPath); err == nil {
-		// Check for SafeTensors
-		safetensors, _ := filepath.Glob(filepath.Join(path, "*.safetensors"))
-		if len(safetensors) > 0 {
-			return ModelFormatHuggingFace
-		}
-		// Check for sharded model index
-		indexPath := filepath.Join(path, "model.safetensors.index.json")
-		if _, err := os.Stat(indexPath); err == nil {
-			return ModelFormatHuggingFace
-		}
-	}
-
 	// Check for ONNX format
 	onnxFiles, _ := filepath.Glob(filepath.Join(path, "*.onnx"))
 	if len(onnxFiles) > 0 {
@@ -394,9 +355,8 @@ func detectGoMLXModelFormat(path string) ModelFormat {
 	return ModelFormatAuto // Unknown
 }
 
-// gomlxModelWrapper wraps hfModel or onnxModel to implement the backends.Model interface.
+// gomlxModelWrapper wraps an onnxModel to implement the backends.Model interface.
 type gomlxModelWrapper struct {
-	hfModel     *hfModel
 	onnxModel   *onnxModel
 	path        string
 	config      *LoadConfig
@@ -435,9 +395,6 @@ func (m *gomlxModelWrapper) Forward(ctx context.Context, inputs *ModelInputs) (*
 
 // forwardDirect runs inference without bucketing.
 func (m *gomlxModelWrapper) forwardDirect(ctx context.Context, inputs *ModelInputs) (*ModelOutput, error) {
-	if m.hfModel != nil {
-		return m.hfModel.forward(ctx, inputs.InputIDs, inputs.AttentionMask)
-	}
 	if m.onnxModel != nil {
 		return m.onnxModel.forward(ctx, inputs)
 	}
@@ -517,9 +474,6 @@ func trimModelOutput(output *ModelOutput, origBatch, origSeq int) *ModelOutput {
 }
 
 func (m *gomlxModelWrapper) Close() error {
-	if m.hfModel != nil {
-		return m.hfModel.close()
-	}
 	if m.onnxModel != nil {
 		return m.onnxModel.close()
 	}
@@ -532,187 +486,6 @@ func (m *gomlxModelWrapper) Name() string {
 
 func (m *gomlxModelWrapper) Backend() BackendType {
 	return m.backendType
-}
-
-// =============================================================================
-// HuggingFace Model (SafeTensors format)
-// =============================================================================
-
-// hfModel implements inference for HuggingFace models (SafeTensors format)
-// using huggingface-gomlx.
-type hfModel struct {
-	path         string
-	pooling      string
-	normalize    bool
-	maxCacheSize int
-	hfModel      *hfmodels.Model
-	ctx          *mlctx.Context
-	engine       backends.Backend
-	exec         *mlctx.Exec // Compiled inference graph
-
-	mu sync.Mutex
-}
-
-// newHFModel loads a HuggingFace model from a local directory.
-// buckets controls both the compiled graph cache and optional pre-compilation of bucket shapes.
-func newHFModel(path string, engine backends.Backend, pooling string, normalize bool, buckets bucketConfig) (*hfModel, error) {
-	// Load the model using huggingface-gomlx
-	hfm, err := hfmodels.NewFromLocal(path)
-	if err != nil {
-		return nil, fmt.Errorf("loading HuggingFace model: %w", err)
-	}
-
-	// Create GoMLX context and load weights
-	ctx := mlctx.New()
-	if err := hfm.LoadWeightsIntoContext(ctx); err != nil {
-		return nil, fmt.Errorf("loading weights into context: %w", err)
-	}
-
-	model := &hfModel{
-		path:         path,
-		pooling:      pooling,
-		normalize:    normalize,
-		maxCacheSize: buckets.maxCacheSize,
-		hfModel:      hfm,
-		ctx:          ctx,
-		engine:       engine,
-	}
-
-	// Pre-compile the inference graph if possible
-	if err := model.compile(buckets); err != nil {
-		return nil, fmt.Errorf("compiling inference graph: %w", err)
-	}
-
-	return model, nil
-}
-
-// compile pre-compiles the inference graph and optionally pre-compiles
-// all bucket shapes to avoid JIT compilation during inference.
-func (m *hfModel) compile(buckets bucketConfig) error {
-	// Get the architecture builder
-	builder := m.hfModel.Builder
-
-	// Check if it's a BERT-like model
-	bertBuilder, ok := builder.(*bert.Builder)
-	if !ok {
-		// For non-BERT models, we'll compile on first forward pass
-		return nil
-	}
-
-	// Pre-compile the BERT forward pass
-	exec, err := mlctx.NewExecAny(m.engine, m.ctx, func(ctx *mlctx.Context, inputs []*graph.Node) []*graph.Node {
-		inputIDs := inputs[0]
-		attentionMask := inputs[1]
-
-		// Run BERT forward pass
-		reuseCtx := ctx.Reuse()
-		hidden, _ := bertBuilder.Forward(reuseCtx, inputIDs, attentionMask, nil, nil)
-		return []*graph.Node{hidden}
-	})
-	if err != nil {
-		return fmt.Errorf("creating exec: %w", err)
-	}
-	if m.maxCacheSize != 0 {
-		exec.SetMaxCache(m.maxCacheSize)
-	}
-	m.exec = exec
-
-	// Pre-compile all bucket shapes so JIT compilation happens at load time
-	// rather than on the first inference for each shape.
-	if buckets.enabled && buckets.maxBatch > 0 && buckets.maxSeq > 0 {
-		batchBuckets := enumerateBuckets(buckets.batchStrategy, buckets.maxBatch)
-		seqBuckets := enumerateBuckets(buckets.seqStrategy, buckets.maxSeq)
-
-		var eg errgroup.Group
-		for _, b := range batchBuckets {
-			for _, s := range seqBuckets {
-				b, s := b, s
-				eg.Go(func() error {
-					ids := tensors.FromFlatDataAndDimensions(make([]int32, b*s), b, s)
-					mask := tensors.FromFlatDataAndDimensions(make([]float32, b*s), b, s)
-					return m.exec.PreCompile(ids, mask)
-				})
-			}
-		}
-		if err := eg.Wait(); err != nil {
-			return fmt.Errorf("pre-compiling bucket shapes: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// forward runs inference on the given inputs.
-func (m *hfModel) forward(ctx context.Context, inputIDs [][]int32, attentionMask [][]int32) (*ModelOutput, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	batchSize := len(inputIDs)
-	if batchSize == 0 {
-		return &ModelOutput{}, nil
-	}
-
-	seqLen := len(inputIDs[0])
-
-	// Create input tensors
-	flatInputIDs := make([]int32, batchSize*seqLen)
-	flatAttentionMask := make([]float32, batchSize*seqLen)
-	for i := range batchSize {
-		for j := range seqLen {
-			flatInputIDs[i*seqLen+j] = inputIDs[i][j]
-			flatAttentionMask[i*seqLen+j] = float32(attentionMask[i][j])
-		}
-	}
-
-	inputIDsTensor := tensors.FromFlatDataAndDimensions(flatInputIDs, batchSize, seqLen)
-	attentionMaskTensor := tensors.FromFlatDataAndDimensions(flatAttentionMask, batchSize, seqLen)
-
-	// Run inference
-	if m.exec == nil {
-		return nil, fmt.Errorf("model not compiled - architecture not supported")
-	}
-	results, err := m.exec.Exec(inputIDsTensor, attentionMaskTensor)
-	if err != nil {
-		return nil, fmt.Errorf("exec failed: %w", err)
-	}
-
-	if len(results) == 0 {
-		return nil, fmt.Errorf("no output from model")
-	}
-
-	// Extract hidden states
-	output := results[0]
-	_ = output.Shape() // Shape is [batch, seq, hidden]
-
-	// Get the data
-	data := output.Value().([][][]float32)
-
-	// Reshape to our format
-	lastHiddenState := make([][][]float32, batchSize)
-	for i := range batchSize {
-		lastHiddenState[i] = data[i]
-	}
-
-	// Apply pooling
-	embeddings := PoolHiddenStates(lastHiddenState, attentionMask, PoolingStrategy(m.pooling))
-
-	// Apply normalization if requested
-	if m.normalize {
-		NormalizeEmbeddings(embeddings)
-	}
-
-	return &ModelOutput{
-		LastHiddenState: lastHiddenState,
-		Embeddings:      embeddings,
-	}, nil
-}
-
-func (m *hfModel) close() error {
-	if m.exec != nil {
-		m.exec.Finalize()
-		m.exec = nil
-	}
-	return nil
 }
 
 // =============================================================================

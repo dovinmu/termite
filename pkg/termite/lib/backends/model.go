@@ -161,8 +161,6 @@ type ModelFormat string
 const (
 	// ModelFormatAuto auto-detects the model format
 	ModelFormatAuto ModelFormat = ""
-	// ModelFormatHuggingFace indicates SafeTensors + config.json format
-	ModelFormatHuggingFace ModelFormat = "huggingface"
 	// ModelFormatONNX indicates ONNX model file format
 	ModelFormatONNX ModelFormat = "onnx"
 )

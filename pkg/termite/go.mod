@@ -3,8 +3,7 @@ module github.com/antflydb/termite/pkg/termite
 go 1.26rc2
 
 require (
-	github.com/ajroetker/go-highway v0.0.0-dev9
-	github.com/ajroetker/huggingface-gomlx v0.0.0-20260125071513-bbe694562131
+	github.com/ajroetker/go-highway v0.0.1
 	github.com/antflydb/antfly-go/libaf v0.0.0-20260126194852-c11aefe42149
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/daulet/tokenizers v1.24.0
