@@ -432,6 +432,21 @@ func PoolHiddenStates(hiddenStates [][][]float32, attentionMask [][]int32, pooli
 			}
 		}
 
+	case PoolingEOS:
+		// Use last non-padding token (EOS position)
+		// Required for CLIP text encoder which stores the text embedding at [EOS]
+		for i := 0; i < batchSize; i++ {
+			// Find the last token with attention (EOS position)
+			lastIdx := 0
+			for j := 0; j < len(hiddenStates[i]); j++ {
+				if attentionMask[i][j] > 0 {
+					lastIdx = j
+				}
+			}
+			embeddings[i] = make([]float32, hiddenSize)
+			copy(embeddings[i], hiddenStates[i][lastIdx])
+		}
+
 	default:
 		// No pooling - return first token
 		for i := 0; i < batchSize; i++ {
