@@ -4,7 +4,7 @@ go 1.26rc2
 
 require (
 	github.com/ajroetker/go-highway v0.0.1
-	github.com/antflydb/antfly-go/libaf v0.0.0-20260126194852-c11aefe42149
+	github.com/antflydb/antfly-go/libaf v0.0.0-20260201045039-cb8261520b44
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/daulet/tokenizers v1.24.0
 	github.com/eliben/go-sentencepiece v0.7.0
@@ -12,8 +12,8 @@ require (
 	github.com/goccy/go-json v0.10.5
 	github.com/gomlx/go-coreml/gomlx v0.0.0-20260127212041-4eb23e6742f6
 	github.com/gomlx/go-huggingface v0.3.2-0.20260125064416-b0f56ca7fbef
-	github.com/gomlx/gomlx v0.26.1-0.20260121051322-dbf0e3293e25
-	github.com/gomlx/onnx-gomlx v0.3.4
+	github.com/gomlx/gomlx v0.26.1-0.20260201092540-7e0f97c4625b
+	github.com/gomlx/onnx-gomlx v0.3.5-0.20260130173634-2497f2c7652f
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/knights-analytics/ortgenai v0.0.3
 	github.com/oapi-codegen/runtime v1.1.2
