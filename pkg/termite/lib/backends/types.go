@@ -13,10 +13,9 @@
 // limitations under the License.
 
 // Package backends provides a unified interface for creating ML inference sessions
-// with multi-backend support. It replaces the hugot dependency with a custom stack:
+// with multi-backend support:
 //
 //   - go-huggingface: Hub download, tokenizers, safetensors parsing
-//   - huggingface-gomlx: Model architectures, GoMLX inference
 //   - onnx-gomlx: ONNX model execution via GoMLX
 //   - onnxruntime_go: Direct ONNX Runtime inference
 //
@@ -336,6 +335,7 @@ func DefaultAudioConfig() *AudioConfig {
 		PaddingValue: 0.0,
 	}
 }
+
 
 // GenerationConfig holds parameters for text generation.
 type GenerationConfig struct {
