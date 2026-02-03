@@ -730,7 +730,29 @@ func (m *ortModel) forwardText(ctx context.Context, inputs *ModelInputs) (*Model
 		return nil, fmt.Errorf("no output tensors returned")
 	}
 
-	// Get the output tensor and extract data
+	// Check for pooler_output - many encoder models (BERT, CLIP, RoBERTa, etc.)
+	// provide a pre-pooled output that should be used instead of manual pooling.
+	var poolerOutput [][]float32
+	for i, name := range m.outputNames {
+		if name == "pooler_output" && i < len(outputTensors) && outputTensors[i] != nil {
+			poolerTensor, ok := outputTensors[i].(*ort.Tensor[float32])
+			if ok {
+				poolerShape := outputTensors[i].GetShape()
+				if len(poolerShape) == 2 {
+					hiddenSize := int(poolerShape[1])
+					poolerData := poolerTensor.GetData()
+					poolerOutput = make([][]float32, batchSize)
+					for j := 0; j < batchSize; j++ {
+						poolerOutput[j] = make([]float32, hiddenSize)
+						copy(poolerOutput[j], poolerData[j*hiddenSize:(j+1)*hiddenSize])
+					}
+				}
+			}
+			break
+		}
+	}
+
+	// Get the first output tensor (last_hidden_state)
 	outputTensor := outputTensors[0]
 	outputShape := outputTensor.GetShape()
 
@@ -759,8 +781,13 @@ func (m *ortModel) forwardText(ctx context.Context, inputs *ModelInputs) (*Model
 			}
 		}
 
-		// Apply pooling to get embeddings
-		embeddings := m.poolHiddenStates(lastHiddenState, inputs.AttentionMask)
+		// Use pooler_output if available, otherwise apply manual pooling
+		var embeddings [][]float32
+		if poolerOutput != nil {
+			embeddings = poolerOutput
+		} else {
+			embeddings = m.poolHiddenStates(lastHiddenState, inputs.AttentionMask)
+		}
 
 		return &ModelOutput{
 			LastHiddenState: lastHiddenState,
@@ -838,6 +865,20 @@ func (m *ortModel) poolHiddenStates(hiddenStates [][][]float32, attentionMask []
 					embeddings[i][h] /= count
 				}
 			}
+		}
+	case "eos", "last":
+		// Use last non-padding token (EOS position)
+		// Required for CLIP text encoder which stores the text embedding at [EOS]
+		for i := 0; i < batchSize; i++ {
+			// Find the last token with attention (EOS position)
+			lastIdx := 0
+			for j := 0; j < len(hiddenStates[i]); j++ {
+				if attentionMask[i][j] > 0 {
+					lastIdx = j
+				}
+			}
+			embeddings[i] = make([]float32, hiddenSize)
+			copy(embeddings[i], hiddenStates[i][lastIdx])
 		}
 	default:
 		// No pooling - return first token

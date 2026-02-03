@@ -910,6 +910,13 @@ func loadTextEmbeddingPipeline(
 		return nil, fmt.Errorf("loading tokenizer: %w", err)
 	}
 
+	// Pooling strategy is a fallback - models with pooler_output (BERT, CLIP, etc.)
+	// will use that directly, ignoring this setting.
+	poolingStrategy := string(loaderCfg.pooling)
+	if poolingStrategy == "" {
+		poolingStrategy = "mean"
+	}
+
 	// Compute relative path for the ONNX file (may be in onnx/ subdirectory)
 	onnxRelPath, err := filepath.Rel(modelPath, config.TextEncoderFile)
 	if err != nil {
@@ -917,23 +924,40 @@ func loadTextEmbeddingPipeline(
 	}
 
 	// Load model
-	model, err := loader.Load(modelPath, backends.WithONNXFile(onnxRelPath))
+	model, err := loader.Load(modelPath,
+		backends.WithONNXFile(onnxRelPath),
+		backends.WithPooling(poolingStrategy),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("loading text model: %w", err)
 	}
 
-	// Build pipeline config
+	// Check for text projection model (e.g., text_projection.onnx for CLIP)
+	// This projects from hidden_size (e.g., 512) to projection_dim (e.g., 512)
+	// Required for cross-modal similarity with visual embeddings
+	var projector backends.Model
+	projectionFile := FindONNXFile(modelPath, []string{
+		"text_projection.onnx",
+	})
+	if projectionFile != "" {
+		projector, err = loader.Load(modelPath, backends.WithONNXFile(filepath.Base(projectionFile)))
+		if err != nil {
+			model.Close()
+			return nil, fmt.Errorf("loading text projection: %w", err)
+		}
+	}
+
+	// Build pipeline config using the same pooling strategy as the model
 	pipelineConfig := &EmbeddingPipelineConfig{
 		MaxLength:        FirstNonZero(loaderCfg.maxLength, 512),
 		Normalize:        loaderCfg.normalize,
-		Pooling:          loaderCfg.pooling,
+		Pooling:          backends.PoolingStrategy(poolingStrategy),
 		AddSpecialTokens: true,
 	}
-	if pipelineConfig.Pooling == "" {
-		pipelineConfig.Pooling = backends.PoolingMean
-	}
 
-	return NewEmbeddingPipeline(model, tokenizer, pipelineConfig), nil
+	pipeline := NewEmbeddingPipeline(model, tokenizer, pipelineConfig)
+	pipeline.Projector = projector
+	return pipeline, nil
 }
 
 // loadVisualEmbeddingPipeline loads the visual encoder as an EmbeddingPipeline.
