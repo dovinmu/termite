@@ -113,3 +113,40 @@ func TestFindONNXFile_NonOnnxCandidateSkipped(t *testing.T) {
 	result := FindONNXFile(dir, []string{"tokenizer.json"})
 	assert.Empty(t, result)
 }
+
+func TestFindONNXFile_GlobFallback_Q4F16(t *testing.T) {
+	dir := t.TempDir()
+	// Transformers.js-style naming with q4f16 suffix (not in known VariantSuffixes)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "decoder_model_merged_q4f16.onnx"), []byte("test"), 0644))
+
+	result := FindONNXFile(dir, []string{"decoder_model_merged.onnx"})
+	assert.Equal(t, filepath.Join(dir, "decoder_model_merged_q4f16.onnx"), result)
+}
+
+func TestFindONNXFile_GlobFallback_EmbedTokens(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "embed_tokens_q4f16.onnx"), []byte("test"), 0644))
+
+	result := FindONNXFile(dir, []string{"embed_tokens.onnx"})
+	assert.Equal(t, filepath.Join(dir, "embed_tokens_q4f16.onnx"), result)
+}
+
+func TestFindONNXFile_GlobFallback_IgnoresOnnxData(t *testing.T) {
+	dir := t.TempDir()
+	// .onnx_data files should not match
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "embed_tokens_q4f16.onnx_data"), []byte("weights"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "embed_tokens_q4f16.onnx"), []byte("graph"), 0644))
+
+	result := FindONNXFile(dir, []string{"embed_tokens.onnx"})
+	assert.Equal(t, filepath.Join(dir, "embed_tokens_q4f16.onnx"), result)
+}
+
+func TestFindONNXFile_KnownVariantPreferredOverGlob(t *testing.T) {
+	dir := t.TempDir()
+	// Known variant (f16) should be found by second pass, before glob third pass
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "model_f16.onnx"), []byte("f16"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "model_q4f16.onnx"), []byte("q4f16"), 0644))
+
+	result := FindONNXFile(dir, []string{"model.onnx"})
+	assert.Equal(t, filepath.Join(dir, "model_f16.onnx"), result)
+}

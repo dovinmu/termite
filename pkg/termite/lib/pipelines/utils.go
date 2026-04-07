@@ -17,6 +17,7 @@ package pipelines
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/antflydb/termite/pkg/termite/lib/modelregistry"
@@ -49,7 +50,7 @@ func FindONNXFile(dir string, candidates []string) string {
 				return path
 			}
 		}
-		// Second pass: try variant filenames derived from each candidate
+		// Second pass: try known variant suffixes (f16, i8, etc.)
 		for _, name := range candidates {
 			stem := strings.TrimSuffix(name, ".onnx")
 			if stem == name {
@@ -60,6 +61,26 @@ func FindONNXFile(dir string, candidates []string) string {
 				if _, err := os.Stat(path); err == nil {
 					return path
 				}
+			}
+		}
+		// Third pass: glob for any variant suffix (handles Transformers.js
+		// naming like decoder_model_merged_q4f16.onnx)
+		for _, name := range candidates {
+			stem := strings.TrimSuffix(name, ".onnx")
+			if stem == name {
+				continue
+			}
+			matches, _ := filepath.Glob(filepath.Join(searchDir, stem+"_*.onnx"))
+			// Filter out .onnx_data files
+			var onnxFiles []string
+			for _, m := range matches {
+				if !strings.HasSuffix(m, ".onnx_data") {
+					onnxFiles = append(onnxFiles, m)
+				}
+			}
+			if len(onnxFiles) > 0 {
+				sort.Strings(onnxFiles)
+				return onnxFiles[0]
 			}
 		}
 	}
