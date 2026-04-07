@@ -1143,10 +1143,19 @@ func LoadTextGenerationPipeline(
 		return nil, "", fmt.Errorf("getting session factory: %w", err)
 	}
 
-	// Load the model
-	model, err := LoadGenerativeModel(modelPath, factory)
-	if err != nil {
-		return nil, "", fmt.Errorf("loading model: %w", err)
+	// Load the model — check for split causal LM first (Transformers.js exports
+	// like Gemma 4 E2B with separate embed_tokens + decoder ONNX files).
+	var model backends.Model
+	if IsSplitCausalLMModel(modelPath) {
+		model, err = LoadSplitCausalLMModel(modelPath, factory)
+		if err != nil {
+			return nil, "", fmt.Errorf("loading split causal LM model: %w", err)
+		}
+	} else {
+		model, err = LoadGenerativeModel(modelPath, factory)
+		if err != nil {
+			return nil, "", fmt.Errorf("loading model: %w", err)
+		}
 	}
 
 	// Load the tokenizer.

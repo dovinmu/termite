@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/antflydb/termite/pkg/termite/lib/pipelines"
 	"go.uber.org/zap"
 )
 
@@ -324,5 +325,10 @@ func isValidGeneratorModel(modelPath string) bool {
 		hasModel = true
 	}
 
-	return hasConfig && hasModel
+	if hasConfig && hasModel {
+		return true
+	}
+
+	// Check for Transformers.js split causal LM format (embed_tokens + decoder)
+	return pipelines.IsSplitCausalLMModel(modelPath)
 }
