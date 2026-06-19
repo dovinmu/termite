@@ -634,3 +634,4 @@ func extractImageURLsFromMessages(messages []GenerativeMessage) []string {
 	}
 	return urls
 }
+
